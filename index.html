@@ -374,9 +374,10 @@ select.inp{appearance:none;cursor:pointer}
 
           <span class="section-label" style="display:block;margin-top:20px">URL / Article / Website</span>
           <div style="display:flex;gap:8px">
-            <input id="inp-url" class="inp" placeholder="https://…" style="flex:1"/>
+            <input id="inp-url" class="inp" placeholder="https://… or https://github.com/user/repo" style="flex:1"/>
             <button id="submit-url" class="btn btn-primary">Fetch</button>
           </div>
+          <p style="font-size:10px;color:var(--text-dim);margin-top:5px">For private GitHub repos: add your token in <button onclick="setView('settings')" style="background:none;border:none;color:var(--gold);font-size:10px;cursor:pointer;padding:0;text-decoration:underline">⚙ Settings</button></p>
 
           <span class="section-label" style="display:block;margin-top:20px">PDF / Image / Text File</span>
           <div id="drop-zone" class="drop-zone">
@@ -1364,30 +1365,43 @@ README:
 ${readmeText||'(no readme)'}${fileList}`;
   }
 
-  // ── Generic URL — CORS proxies ──
+  // ── Generic URL — CORS proxies with fallbacks ──
+  function makeSignal(ms){ try{ return AbortSignal.timeout(ms); }catch{ return undefined; } }
+  function stripHtml(raw){
+    return raw.replace(/<script[\s\S]*?<\/script>/gi,'')
+              .replace(/<style[\s\S]*?<\/style>/gi,'')
+              .replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ')
+              .replace(/\s+/g,' ').trim();
+  }
   const proxies=[
+    // allorigins — returns JSON wrapper
     async u=>{
-      const r=await fetch('https://api.allorigins.win/get?url='+encodeURIComponent(u),{signal:AbortSignal.timeout(12000)});
+      const r=await fetch('https://api.allorigins.win/get?url='+encodeURIComponent(u),{signal:makeSignal(12000)});
       if(!r.ok) throw new Error('allorigins '+r.status);
       const d=await r.json(); return d.contents||'';
     },
+    // corsproxy.io — returns raw response (URL goes directly after ?)
     async u=>{
-      const r=await fetch('https://corsproxy.io/?url='+encodeURIComponent(u),{signal:AbortSignal.timeout(12000)});
+      const r=await fetch('https://corsproxy.io/?'+encodeURIComponent(u),{signal:makeSignal(12000)});
       if(!r.ok) throw new Error('corsproxy '+r.status);
+      return r.text();
+    },
+    // codetabs — another public proxy
+    async u=>{
+      const r=await fetch('https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u),{signal:makeSignal(12000)});
+      if(!r.ok) throw new Error('codetabs '+r.status);
       return r.text();
     }
   ];
-  let lastErr='';
+  let lastErr='all proxies failed';
   for(const proxy of proxies){
     try{
       const raw=await proxy(url);
-      const text=raw.replace(/<script[\s\S]*?<\/script>/gi,'')
-                    .replace(/<style[\s\S]*?<\/style>/gi,'')
-                    .replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
-      if(text.length>100) return text.slice(0,6000);
+      const text=stripHtml(raw);
+      if(text.length>80) return text.slice(0,6000);
     }catch(e){ lastErr=e.message; }
   }
-  throw new Error('Could not fetch URL ('+lastErr+'). Try pasting the text directly.');
+  throw new Error('Could not fetch URL — '+lastErr+'. Try pasting the content directly.');
 }
 
 // Export / Import / Clear
