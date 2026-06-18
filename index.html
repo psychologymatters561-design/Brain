@@ -537,7 +537,12 @@ async function callAI(messages, system){
   if(!state.apiKey) throw new Error('No API key — go to ⚙ Settings and add your key.');
   const r = await fetch('https://api.anthropic.com/v1/messages',{
     method:'POST',
-    headers:{'Content-Type':'application/json'},
+    headers:{
+      'Content-Type':'application/json',
+      'x-api-key': state.apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
     body: JSON.stringify({
       model:'claude-sonnet-4-6',
       max_tokens:1000,
@@ -1382,7 +1387,7 @@ README:
 ${readmeText||'(no readme)'}${fileList}`;
   }
 
-  // ── Generic URL — CORS proxies with fallbacks ──
+  // ── Generic URL — direct fetch first, then CORS proxies ──
   function makeSignal(ms){ try{ return AbortSignal.timeout(ms); }catch{ return undefined; } }
   function stripHtml(raw){
     return raw.replace(/<script[\s\S]*?<\/script>/gi,'')
@@ -1390,30 +1395,36 @@ ${readmeText||'(no readme)'}${fileList}`;
               .replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ')
               .replace(/\s+/g,' ').trim();
   }
-  const proxies=[
+  const fetchers=[
+    // Direct — works when the target allows CORS (many APIs, GitHub raw, etc.)
+    async u=>{
+      const r=await fetch(u,{signal:makeSignal(8000)});
+      if(!r.ok) throw new Error('direct '+r.status);
+      return r.text();
+    },
     // allorigins — returns JSON wrapper
     async u=>{
       const r=await fetch('https://api.allorigins.win/get?url='+encodeURIComponent(u),{signal:makeSignal(12000)});
       if(!r.ok) throw new Error('allorigins '+r.status);
       const d=await r.json(); return d.contents||'';
     },
-    // corsproxy.io — returns raw response (URL goes directly after ?)
+    // corsproxy.io — URL goes directly after ?
     async u=>{
       const r=await fetch('https://corsproxy.io/?'+encodeURIComponent(u),{signal:makeSignal(12000)});
       if(!r.ok) throw new Error('corsproxy '+r.status);
       return r.text();
     },
-    // codetabs — another public proxy
+    // codetabs proxy
     async u=>{
       const r=await fetch('https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u),{signal:makeSignal(12000)});
       if(!r.ok) throw new Error('codetabs '+r.status);
       return r.text();
     }
   ];
-  let lastErr='all proxies failed';
-  for(const proxy of proxies){
+  let lastErr='all fetchers failed';
+  for(const fetcher of fetchers){
     try{
-      const raw=await proxy(url);
+      const raw=await fetcher(url);
       const text=stripHtml(raw);
       if(text.length>80) return text.slice(0,6000);
     }catch(e){ lastErr=e.message; }
