@@ -442,6 +442,14 @@ select.inp{appearance:none;cursor:pointer}
         </div>
         <p id="key-saved-msg" style="font-size:11px;color:var(--green);margin-top:6px;display:none">✓ Key saved. Brain is live.</p>
 
+        <span class="section-label" style="display:block;margin-top:24px">GitHub Personal Access Token</span>
+        <p style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Required to read private repos. Create one at github.com → Settings → Developer settings → Personal access tokens (scope: <code style="font-family:var(--font-mono);color:var(--text-mid)">repo</code>).</p>
+        <div style="display:flex;gap:8px">
+          <input id="gh-token-input" type="password" class="inp" placeholder="ghp_… or github_pat_…"/>
+          <button id="save-gh-token" class="btn btn-primary">Save</button>
+        </div>
+        <p id="gh-token-msg" style="font-size:11px;color:var(--green);margin-top:6px;display:none">✓ GitHub token saved.</p>
+
         <span class="section-label" style="display:block;margin-top:24px">Brain Data</span>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button id="export-btn" class="btn btn-ghost">⬇ Export JSON</button>
@@ -475,8 +483,9 @@ select.inp{appearance:none;cursor:pointer}
 // ═══════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════
-const STORAGE_KEY = 'mind_brain_v3';
-const KEY_STORE   = 'mind_api_key';
+const STORAGE_KEY  = 'mind_brain_v3';
+const KEY_STORE    = 'mind_api_key';
+const GH_TOKEN_STORE = 'mind_gh_token';
 const DOMAINS     = ['Geopolitics','Real Estate','Philosophy','Business','Vedic','Macro','Personal','Research','Other'];
 const DOMAIN_COLOR= {
   'Geopolitics':'#e85d4a','Real Estate':'#f4a261','Philosophy':'#a8dadc',
@@ -492,6 +501,7 @@ const dColor = d => DOMAIN_COLOR[d] || DOMAIN_COLOR['Other'];
 let state = {
   brain: loadBrain(),
   apiKey: localStorage.getItem(KEY_STORE) || '',
+  githubToken: localStorage.getItem(GH_TOKEN_STORE) || '',
   currentView: 'graph',
   selectedId: null,
   chatHistory: [],
@@ -1272,72 +1282,112 @@ function showProc(v,status=''){
 }
 
 // ═══════════════════════════════════════════════════════════════
-// URL FETCHER — GitHub-aware
+// URL FETCHER — GitHub-aware with token support
 // ═══════════════════════════════════════════════════════════════
+function ghHeaders(){
+  const h={'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};
+  if(state.githubToken) h['Authorization']='Bearer '+state.githubToken;
+  return h;
+}
+function ghErrMsg(status){
+  if(status===404) return 'Not found. If this is a private repo, add your GitHub token in ⚙ Settings.';
+  if(status===401||status===403) return 'Access denied — add your GitHub token in ⚙ Settings.';
+  return 'GitHub API error '+status+'.';
+}
+function b64decode(str){
+  try{ return atob(str.replace(/\n/g,'')); }catch{ return ''; }
+}
+
 async function fetchURL(url){
-  // ── GitHub repo: github.com/{owner}/{repo} ──
-  const ghRepo = url.match(/github\.com\/([^/]+)\/([^/?\s#]+)(?:\/tree\/([^/?\s#]+))?(?:\/([^?\s#]*))?/);
-  if(ghRepo){
-    const [,owner,repo,branch,subpath] = ghRepo;
+  // ── GitHub blob file: github.com/{owner}/{repo}/blob/{branch}/{path} ──
+  const blobMatch = url.match(/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+?)(?:\?.*)?$/);
+  if(blobMatch){
+    const [,owner,repo,branch,path] = blobMatch;
+    showProc(true,'Reading GitHub file…');
+    const apiUrl=`https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`;
+    const r=await fetch(apiUrl,{headers:ghHeaders()});
+    if(!r.ok) throw new Error(ghErrMsg(r.status));
+    const d=await r.json();
+    if(!d.content) throw new Error('File has no readable content (may be binary or too large).');
+    return b64decode(d.content).slice(0,8000);
+  }
 
-    // Raw file: github.com/…/blob/{branch}/{path}
-    const blobMatch = url.match(/github\.com\/[^/]+\/[^/]+\/blob\/([^/]+)\/(.+)/);
-    if(blobMatch){
-      const [,br,path] = blobMatch;
-      const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${br}/${path}`;
-      const r = await fetch(rawUrl);
-      if(!r.ok) throw new Error(`GitHub raw fetch failed: ${r.status}`);
-      return (await r.text()).slice(0,8000);
+  // ── raw.githubusercontent.com ──
+  if(/raw\.githubusercontent\.com/.test(url)){
+    const r=await fetch(url);
+    if(r.ok) return (await r.text()).slice(0,8000);
+    // Private — fall back to Contents API
+    const m=url.match(/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)/);
+    if(m){
+      const [,owner,repo,branch,path]=m;
+      const ar=await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`,{headers:ghHeaders()});
+      if(!ar.ok) throw new Error(ghErrMsg(ar.status));
+      const d=await ar.json();
+      return b64decode(d.content||'').slice(0,8000);
     }
+    throw new Error('Could not fetch raw file.');
+  }
 
-    // Raw file URL already
-    if(url.includes('raw.githubusercontent.com')){
-      const r = await fetch(url);
-      if(!r.ok) throw new Error(`Fetch failed: ${r.status}`);
-      return (await r.text()).slice(0,8000);
-    }
-
-    // Repo root or tree — fetch meta + README via GitHub API
+  // ── GitHub repo root or tree ──
+  const repoMatch = url.match(/github\.com\/([^/?\s#]+)\/([^/?\s#]+)/);
+  if(repoMatch){
+    const [,owner,repo]=repoMatch;
     showProc(true,'Reading GitHub repo…');
-    const apiBase = `https://api.github.com/repos/${owner}/${repo}`;
-    const headers = {'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};
-    const [metaRes, readmeRes] = await Promise.all([
-      fetch(apiBase, {headers}),
-      fetch(`${apiBase}/readme`, {headers})
+    const apiBase=`https://api.github.com/repos/${owner}/${repo}`;
+    const [metaRes,readmeRes]=await Promise.all([
+      fetch(apiBase,{headers:ghHeaders()}),
+      fetch(apiBase+'/readme',{headers:ghHeaders()})
     ]);
-    if(!metaRes.ok) throw new Error(`GitHub API error ${metaRes.status} — repo may be private or not exist.`);
-    const meta = await metaRes.json();
-    let readmeText = '';
+    if(!metaRes.ok) throw new Error(ghErrMsg(metaRes.status));
+    const meta=await metaRes.json();
+    let readmeText='';
     if(readmeRes.ok){
-      const rdJson = await readmeRes.json();
-      readmeText = atob(rdJson.content.replace(/\n/g,'')).slice(0,4000);
+      const rd=await readmeRes.json();
+      readmeText=b64decode(rd.content||'').slice(0,4000);
     }
-    // If subpath specified, also try to fetch that file
-    let fileText = '';
-    if(subpath){
-      const targetBranch = branch || meta.default_branch;
-      const rawFile = `https://raw.githubusercontent.com/${owner}/${repo}/${targetBranch}/${subpath}`;
-      const fr = await fetch(rawFile);
-      if(fr.ok) fileText = '\n\nFILE ('+subpath+'):\n'+(await fr.text()).slice(0,3000);
+    // Fetch file tree for context
+    let fileList='';
+    const treeRes=await fetch(`${apiBase}/git/trees/${meta.default_branch}?recursive=1`,{headers:ghHeaders()});
+    if(treeRes.ok){
+      const tree=await treeRes.json();
+      const files=(tree.tree||[]).filter(f=>f.type==='blob').map(f=>f.path).slice(0,60);
+      if(files.length) fileList='\n\nFile tree:\n'+files.join('\n');
     }
     return `GITHUB REPO: ${meta.full_name}
 Description: ${meta.description||'—'}
 Language: ${meta.language||'—'}
 Stars: ${meta.stargazers_count} | Forks: ${meta.forks_count}
 Topics: ${(meta.topics||[]).join(', ')||'—'}
-Default branch: ${meta.default_branch}
+Default branch: ${meta.default_branch}${meta.homepage?'\nWebsite: '+meta.homepage:''}
 
 README:
-${readmeText||'(no readme)'}${fileText}`;
+${readmeText||'(no readme)'}${fileList}`;
   }
 
-  // ── Generic URL — CORS proxy ──
-  const r = await fetch('https://api.allorigins.win/get?url='+encodeURIComponent(url));
-  if(!r.ok) throw new Error('Could not fetch URL. Paste the text manually.');
-  const d = await r.json();
-  const text = (d.contents||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
-  if(!text) throw new Error('No readable content found at that URL. Try pasting the text directly.');
-  return text.slice(0,6000);
+  // ── Generic URL — CORS proxies ──
+  const proxies=[
+    async u=>{
+      const r=await fetch('https://api.allorigins.win/get?url='+encodeURIComponent(u),{signal:AbortSignal.timeout(12000)});
+      if(!r.ok) throw new Error('allorigins '+r.status);
+      const d=await r.json(); return d.contents||'';
+    },
+    async u=>{
+      const r=await fetch('https://corsproxy.io/?url='+encodeURIComponent(u),{signal:AbortSignal.timeout(12000)});
+      if(!r.ok) throw new Error('corsproxy '+r.status);
+      return r.text();
+    }
+  ];
+  let lastErr='';
+  for(const proxy of proxies){
+    try{
+      const raw=await proxy(url);
+      const text=raw.replace(/<script[\s\S]*?<\/script>/gi,'')
+                    .replace(/<style[\s\S]*?<\/style>/gi,'')
+                    .replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+      if(text.length>100) return text.slice(0,6000);
+    }catch(e){ lastErr=e.message; }
+  }
+  throw new Error('Could not fetch URL ('+lastErr+'). Try pasting the text directly.');
 }
 
 // Export / Import / Clear
@@ -1387,6 +1437,20 @@ document.addEventListener('DOMContentLoaded',()=>{
     $('settings-key').value=state.apiKey;
     $('key-status').style.display='inline';
   }
+
+  // GitHub token save
+  $('save-gh-token').addEventListener('click',()=>{
+    const k=$('gh-token-input').value.trim();
+    state.githubToken=k;
+    if(k) localStorage.setItem(GH_TOKEN_STORE,k);
+    else localStorage.removeItem(GH_TOKEN_STORE);
+    $('gh-token-msg').style.display='block';
+    $('gh-token-msg').textContent=k?'✓ GitHub token saved.':'GitHub token cleared.';
+    toast(k?'GitHub token saved':'GitHub token cleared');
+  });
+
+  // Pre-fill GitHub token if saved
+  if(state.githubToken) $('gh-token-input').value=state.githubToken;
 
   // Error close
   $('error-close').addEventListener('click',hideError);
