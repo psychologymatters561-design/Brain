@@ -51,7 +51,6 @@ input,textarea,select{font-family:var(--font-body);outline:none;color:var(--text
 }
 .nav-btn:hover{color:var(--text)}
 .nav-btn.active{background:var(--gold-glow);color:var(--gold);border-color:rgba(201,168,76,.2)}
-#key-area{display:flex;gap:6px;align-items:center;margin-left:6px}
 #key-status{font-size:10px;color:var(--green);white-space:nowrap}
 
 /* MAIN */
@@ -522,8 +521,11 @@ let state = {
 // PERSISTENCE
 // ═══════════════════════════════════════════════════════════════
 function loadBrain(){
-  try{ return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {thoughts:[],edges:[]}; }
-  catch{ return {thoughts:[],edges:[]}; }
+  try{
+    const d=JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if(d&&Array.isArray(d.thoughts)&&Array.isArray(d.edges)) return d;
+    return {thoughts:[],edges:[]};
+  }catch{ return {thoughts:[],edges:[]}; }
 }
 function saveBrain(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.brain)); }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2); }
@@ -585,12 +587,17 @@ Return exactly this JSON structure:
 }
 
 async function chatWithBrain(userMsg){
-  const kb = state.brain.thoughts.map((t,i)=>
-    `[${i+1}][${t.domain}][${t.confidence}] ${t.summary}\n  Insight: ${t.keyInsight}\n  Implies: ${t.implication||'—'}`
-  ).join('\n\n');
+  const MAX_KB=6000;
+  let kb='', idx=0;
+  for(const t of state.brain.thoughts){
+    const e=`[${++idx}][${t.domain}][${t.confidence}] ${t.summary}\n  Insight: ${t.keyInsight}\n  Implies: ${t.implication||'—'}\n\n`;
+    if(kb.length+e.length>MAX_KB) break;
+    kb+=e;
+  }
+  kb=kb.trimEnd();
   const system = `You are the living intelligence of this person's second brain — the accumulated weight of everything they have ever thought, read, and believed.
 
-KNOWLEDGE BASE (${state.brain.thoughts.length} thoughts):
+KNOWLEDGE BASE (${state.brain.thoughts.length} thoughts${idx<state.brain.thoughts.length?`, showing first ${idx}`:''}):
 ${kb || 'Empty. Tell the user to add thoughts first via the Feed tab.'}
 
 RULES:
@@ -680,9 +687,34 @@ function deleteThought(id){
 // ═══════════════════════════════════════════════════════════════
 // GRAPH
 // ═══════════════════════════════════════════════════════════════
+function initGraphDefs(){
+  const svg=d3.select('#graph-svg');
+  if(svg.select('#graph-defs').node()) return;
+  const defs=svg.append('defs').attr('id','graph-defs');
+  Object.entries(DOMAIN_COLOR).forEach(([name,col])=>{
+    const k=name.replace(/\s/g,'');
+    const f=defs.append('filter').attr('id','glow-'+k)
+               .attr('x','-60%').attr('y','-60%').attr('width','220%').attr('height','220%');
+    f.append('feGaussianBlur').attr('stdDeviation','3.5').attr('result','blur');
+    const fm=f.append('feMerge');
+    fm.append('feMergeNode').attr('in','blur');
+    fm.append('feMergeNode').attr('in','SourceGraphic');
+  });
+  const sf=defs.append('filter').attr('id','glow-sel')
+             .attr('x','-80%').attr('y','-80%').attr('width','260%').attr('height','260%');
+  sf.append('feGaussianBlur').attr('stdDeviation','8').attr('result','blur');
+  const sfm=sf.append('feMerge');
+  sfm.append('feMergeNode').attr('in','blur'); sfm.append('feMergeNode').attr('in','SourceGraphic');
+  const gf=defs.append('filter').attr('id','glow-gold')
+             .attr('x','-60%').attr('y','-60%').attr('width','220%').attr('height','220%');
+  gf.append('feGaussianBlur').attr('stdDeviation','4').attr('result','blur');
+  const gfm=gf.append('feMerge');
+  gfm.append('feMergeNode').attr('in','blur'); gfm.append('feMergeNode').attr('in','SourceGraphic');
+}
+
 function renderGraph(){
   const svg = d3.select('#graph-svg');
-  svg.selectAll('*').remove();
+  svg.select('#graph-root').remove();
   if(state.sim){ state.sim.stop(); state.sim=null; }
   if(state.rafId){ cancelAnimationFrame(state.rafId); state.rafId=null; }
 
@@ -717,31 +749,6 @@ function renderGraph(){
     return;
   }
 
-  // Defs
-  const defs = svg.append('defs');
-  // Glow filters
-  Object.entries(DOMAIN_COLOR).forEach(([name,col])=>{
-    const k = name.replace(/\s/g,'');
-    const f = defs.append('filter').attr('id','glow-'+k)
-               .attr('x','-60%').attr('y','-60%').attr('width','220%').attr('height','220%');
-    f.append('feGaussianBlur').attr('stdDeviation','3.5').attr('result','blur');
-    const fm = f.append('feMerge');
-    fm.append('feMergeNode').attr('in','blur');
-    fm.append('feMergeNode').attr('in','SourceGraphic');
-  });
-  // Selected glow
-  const sf = defs.append('filter').attr('id','glow-sel')
-             .attr('x','-80%').attr('y','-80%').attr('width','260%').attr('height','260%');
-  sf.append('feGaussianBlur').attr('stdDeviation','8').attr('result','blur');
-  const sfm = sf.append('feMerge');
-  sfm.append('feMergeNode').attr('in','blur'); sfm.append('feMergeNode').attr('in','SourceGraphic');
-  // Gold glow
-  const gf = defs.append('filter').attr('id','glow-gold')
-             .attr('x','-60%').attr('y','-60%').attr('width','220%').attr('height','220%');
-  gf.append('feGaussianBlur').attr('stdDeviation','4').attr('result','blur');
-  const gfm = gf.append('feMerge');
-  gfm.append('feMergeNode').attr('in','blur'); gfm.append('feMergeNode').attr('in','SourceGraphic');
-
   const visIds = new Set(thoughts.map(t=>t.id));
   const nodes = thoughts.map(t=>({
     ...t,
@@ -749,7 +756,6 @@ function renderGraph(){
     _col: dColor(t.domain),
     _glow: 'glow-'+(t.domain||'Other').replace(/\s/g,'')
   }));
-  const nodeMap = Object.fromEntries(nodes.map(n=>[n.id,n]));
   const links = state.brain.edges
     .filter(e=>visIds.has(e.source)&&visIds.has(e.target))
     .map(e=>({...e}));
@@ -762,7 +768,7 @@ function renderGraph(){
     .force('collide', d3.forceCollide().radius(d=>d._r+20));
   state.sim = sim;
 
-  const root = svg.append('g');
+  const root = svg.append('g').attr('id','graph-root');
   svg.call(
     d3.zoom().scaleExtent([.2,4])
     .on('zoom', e=>root.attr('transform',e.transform))
@@ -824,28 +830,31 @@ function renderGraph(){
     nodeSel.attr('transform',d=>`translate(${d.x},${d.y})`);
   });
 
-  // Synaptic particles
-  const particles = [];
+  // Synaptic particles — fixed pool avoids DOM create/destroy every frame
+  const MAX_PT=30;
+  const particles=[];
+  const ptPool=Array.from({length:MAX_PT},()=>
+    partG.append('circle').attr('r',2.5).attr('opacity',0)
+  );
   function frame(){
-    if(links.length>0 && Math.random()<.05){
-      const l = links[Math.floor(Math.random()*links.length)];
-      particles.push({l, t:0, spd:.006+Math.random()*.012, col:l.type==='contradiction'?'#e85d4a':'#c9a84c'});
+    if(links.length>0 && Math.random()<.05 && particles.length<MAX_PT){
+      const l=links[Math.floor(Math.random()*links.length)];
+      particles.push({l,t:0,spd:.006+Math.random()*.012,col:l.type==='contradiction'?'#e85d4a':'#c9a84c'});
     }
     for(let i=particles.length-1;i>=0;i--){
-      particles[i].t += particles[i].spd;
+      particles[i].t+=particles[i].spd;
       if(particles[i].t>=1) particles.splice(i,1);
     }
-    partG.selectAll('circle.pt').remove();
-    particles.forEach(p=>{
-      const s=p.l.source, t=p.l.target;
-      if(!s.x||!t.x) return;
-      const x=s.x+(t.x-s.x)*p.t, y=s.y+(t.y-s.y)*p.t;
-      const op = p.t<.5 ? p.t*2 : (1-p.t)*2;
-      partG.append('circle').attr('class','pt')
-        .attr('cx',x).attr('cy',y).attr('r',2.5)
-        .attr('fill',p.col).attr('opacity',op);
+    ptPool.forEach((circle,i)=>{
+      const p=particles[i];
+      if(!p){ circle.attr('opacity',0); return; }
+      const s=p.l.source, tt=p.l.target;
+      if(!s.x||!tt.x){ circle.attr('opacity',0); return; }
+      const x=s.x+(tt.x-s.x)*p.t, y=s.y+(tt.y-s.y)*p.t;
+      const op=p.t<.5?p.t*2:(1-p.t)*2;
+      circle.attr('cx',x).attr('cy',y).attr('fill',p.col).attr('opacity',op);
     });
-    state.rafId = requestAnimationFrame(frame);
+    state.rafId=requestAnimationFrame(frame);
   }
   frame();
 }
@@ -875,7 +884,7 @@ function renderSidebar(){
           const oid=e.source===t.id?e.target:e.source;
           const ot=state.brain.thoughts.find(x=>x.id===oid); if(!ot) return '';
           const ec=dColor(ot.domain);
-          return `<div class="conn-card" onclick="state.selectedId='${ot.id}';renderSidebar();openModal(state.brain.thoughts.find(x=>x.id==='${ot.id}'))">
+          return `<div class="conn-card" onclick="selectAndOpen('${ot.id}')">
             <div style="flex-shrink:0;margin-top:3px"><div style="width:9px;height:9px;border-radius:50%;background:${ec};box-shadow:0 0 5px ${ec}"></div></div>
             <div style="flex:1;min-width:0">
               <span style="font-size:9px;color:${e.type==='contradiction'?'var(--red)':'var(--gold)'};font-weight:700">${e.type==='contradiction'?'⚡ contradicts':'⟷ connects'}</span>
@@ -971,7 +980,7 @@ function openModal(t){
     body += `<span class="section-label">Connected Thoughts (${connected.length})</span>`;
     connected.forEach(({thought:ct,type})=>{
       const cc=dColor(ct.domain);
-      body += `<div class="conn-card" onclick="openModal(state.brain.thoughts.find(x=>x.id==='${ct.id}'))" style="border-color:${type==='contradiction'?'rgba(232,93,74,.3)':cc+'33'}">
+      body += `<div class="conn-card" onclick="selectAndOpen('${ct.id}')" style="border-color:${type==='contradiction'?'rgba(232,93,74,.3)':cc+'33'}">
         <div style="flex-shrink:0;margin-top:3px"><div style="width:10px;height:10px;border-radius:50%;background:${cc};box-shadow:0 0 7px ${cc}"></div></div>
         <div style="flex:1;min-width:0">
           <div style="display:flex;gap:7px;margin-bottom:5px;flex-wrap:wrap">
@@ -1014,6 +1023,13 @@ function openModal(t){
 
 function closeModal(){
   $('modal-backdrop').classList.remove('show');
+}
+function selectAndOpen(id){
+  const t=state.brain.thoughts.find(x=>x.id===id);
+  if(!t) return;
+  state.selectedId=id;
+  openModal(t);
+  if(state.currentView==='graph') renderSidebar();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1061,7 +1077,7 @@ function renderLibrary(){
   grid.innerHTML=thoughts.map(t=>{
     const col=dColor(t.domain);
     const connCount=state.brain.edges.filter(e=>e.source===t.id||e.target===t.id).length;
-    return `<div class="t-card${state.selectedId===t.id?' selected':''}" onclick="state.selectedId='${t.id}';openModal(state.brain.thoughts.find(x=>x.id==='${t.id}'));renderLibrary()">
+    return `<div class="t-card${state.selectedId===t.id?' selected':''}" onclick="selectAndOpen('${t.id}');renderLibrary()">
       <div style="display:flex;justify-content:space-between;margin-bottom:8px">
         <span class="tag" style="background:${col}22;color:${col};border:1px solid ${col}33">${t.domain}</span>
         <span style="font-size:9px;color:var(--text-dim)">${new Date(t.timestamp).toLocaleDateString('en-IN',{day:'numeric',month:'short'})}</span>
@@ -1277,10 +1293,11 @@ function toast(msg){
 function showProc(v,status=''){
   const po=$('proc-overlay'), ff=$('feed-form');
   if(!po||!ff) return;
-  po.style.display=v?'flex':'none';
+  po.classList.toggle('show',v);
   ff.style.display=v?'none':'block';
   if(status) $('proc-status').textContent=status;
 }
+function debounce(fn,ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; }
 
 // ═══════════════════════════════════════════════════════════════
 // URL FETCHER — GitHub-aware with token support
@@ -1508,11 +1525,11 @@ document.addEventListener('DOMContentLoaded',()=>{
   });
 
   // Graph filters
-  $('graph-search').addEventListener('input',e=>{ state.searchGraph=e.target.value; renderGraph(); });
+  $('graph-search').addEventListener('input',debounce(e=>{ state.searchGraph=e.target.value; renderGraph(); },200));
   $('graph-domain-filter').addEventListener('change',e=>{ state.domainFilter=e.target.value; renderGraph(); });
 
   // Library filters
-  $('lib-search').addEventListener('input',e=>{ state.libSearch=e.target.value; renderLibrary(); });
+  $('lib-search').addEventListener('input',debounce(e=>{ state.libSearch=e.target.value; renderLibrary(); },200));
   $('lib-domain').addEventListener('change',e=>{ state.libDomain=e.target.value; renderLibrary(); });
   $('lib-sort').addEventListener('change',e=>{ state.libSort=e.target.value; renderLibrary(); });
 
@@ -1534,6 +1551,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   window.addEventListener('resize',()=>{ if(state.currentView==='graph') renderGraph(); });
 
   // Initial render
+  initGraphDefs();
   populateDomainFilters();
   renderAll();
 });
