@@ -358,6 +358,21 @@ select.inp{appearance:none;cursor:pointer}
       <div id="feed-inner">
         <h2>Feed Your Brain</h2>
         <p class="sub">Every input is read, analysed, connected, and stored permanently.</p>
+
+        <!-- Setup banner — visible until API key is saved -->
+        <div id="setup-banner" style="background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.28);border-radius:var(--radius);padding:16px;margin-bottom:20px">
+          <p style="font-size:12px;font-weight:700;color:var(--gold);margin-bottom:8px">⬡ Two keys needed to get started</p>
+          <div style="margin-bottom:10px">
+            <p style="font-size:11px;color:var(--text-mid);margin-bottom:5px"><span id="key-status-dot" style="font-size:8px">●</span> <strong style="color:var(--text)">Anthropic API Key</strong> — processes every thought with AI</p>
+            <p style="font-size:11px;color:var(--text-mid)"><span style="font-size:8px;color:var(--text-dim)">●</span> <strong style="color:var(--text)">GitHub Token</strong> (optional) — lets you paste private repo URLs</p>
+          </div>
+          <p style="font-size:10px;color:var(--text-dim);margin-bottom:10px">Both are saved only in this browser — never sent anywhere except their own APIs.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <button onclick="setView('settings')" class="btn btn-primary" style="font-size:11px;padding:7px 14px">⚙ Add Keys in Settings</button>
+            <span id="feed-key-ok" style="font-size:11px;color:var(--green);display:none">✓ API key set</span>
+          </div>
+        </div>
+
         <div id="proc-overlay">
           <span id="proc-spinner">⬡</span>
           <span id="proc-status">Processing…</span>
@@ -371,12 +386,12 @@ select.inp{appearance:none;cursor:pointer}
           <div id="voice-indicator" style="display:none;font-size:10px;color:var(--red);margin-top:3px">● Listening…</div>
           <button id="submit-text" class="btn btn-primary" style="margin-top:9px">Process Thought →</button>
 
-          <span class="section-label" style="display:block;margin-top:20px">URL / Article / Website</span>
+          <span class="section-label" style="display:block;margin-top:20px">URL / Article / GitHub Repo</span>
           <div style="display:flex;gap:8px">
-            <input id="inp-url" class="inp" placeholder="https://… or https://github.com/user/repo" style="flex:1"/>
+            <input id="inp-url" class="inp" placeholder="https://any-url.com  or  https://github.com/user/repo" style="flex:1"/>
             <button id="submit-url" class="btn btn-primary">Fetch</button>
           </div>
-          <p style="font-size:10px;color:var(--text-dim);margin-top:5px">For private GitHub repos: add your token in <button onclick="setView('settings')" style="background:none;border:none;color:var(--gold);font-size:10px;cursor:pointer;padding:0;text-decoration:underline">⚙ Settings</button></p>
+          <p style="font-size:10px;color:var(--text-dim);margin-top:5px">Works for any public URL or GitHub repo. For <strong style="color:var(--text-mid)">private repos</strong>: add your GitHub token in <button onclick="setView('settings')" style="background:none;border:none;color:var(--gold);font-size:10px;cursor:pointer;padding:0;text-decoration:underline">⚙ Settings</button></p>
 
           <span class="section-label" style="display:block;margin-top:20px">PDF / Image / Text File</span>
           <div id="drop-zone" class="drop-zone">
@@ -1182,6 +1197,24 @@ function renderHeaderStats(){
 // ═══════════════════════════════════════════════════════════════
 // MASTER RENDER
 // ═══════════════════════════════════════════════════════════════
+function updateSetupBanner(){
+  const banner=$('setup-banner');
+  const dot=$('key-status-dot');
+  const ok=$('feed-key-ok');
+  if(!banner) return;
+  if(state.apiKey){
+    banner.style.background='rgba(128,237,153,.06)';
+    banner.style.borderColor='rgba(128,237,153,.2)';
+    if(dot){ dot.style.color='var(--green)'; }
+    if(ok) ok.style.display='inline';
+  } else {
+    banner.style.background='rgba(201,168,76,.08)';
+    banner.style.borderColor='rgba(201,168,76,.28)';
+    if(dot){ dot.style.color='var(--red)'; }
+    if(ok) ok.style.display='none';
+  }
+}
+
 function renderAll(){
   renderHeaderStats();
   renderGraphOverlay();
@@ -1189,6 +1222,7 @@ function renderAll(){
   if(state.currentView==='library') renderLibrary();
   if(state.currentView==='settings') renderStats();
   populateDomainFilters();
+  updateSetupBanner();
 }
 
 function populateDomainFilters(){
@@ -1387,7 +1421,7 @@ README:
 ${readmeText||'(no readme)'}${fileList}`;
   }
 
-  // ── Generic URL — direct fetch first, then CORS proxies ──
+  // ── Generic URL — Jina Reader first (purpose-built, CORS-enabled), then fallbacks ──
   function makeSignal(ms){ try{ return AbortSignal.timeout(ms); }catch{ return undefined; } }
   function stripHtml(raw){
     return raw.replace(/<script[\s\S]*?<\/script>/gi,'')
@@ -1396,28 +1430,22 @@ ${readmeText||'(no readme)'}${fileList}`;
               .replace(/\s+/g,' ').trim();
   }
   const fetchers=[
-    // Direct — works when the target allows CORS (many APIs, GitHub raw, etc.)
+    // Jina Reader — purpose-built for LLM content extraction, supports CORS
     async u=>{
-      const r=await fetch(u,{signal:makeSignal(8000)});
-      if(!r.ok) throw new Error('direct '+r.status);
+      const r=await fetch('https://r.jina.ai/'+u,{signal:makeSignal(18000)});
+      if(!r.ok) throw new Error('jina '+r.status);
       return r.text();
     },
-    // allorigins — returns JSON wrapper
+    // allorigins — JSON wrapper fallback
     async u=>{
       const r=await fetch('https://api.allorigins.win/get?url='+encodeURIComponent(u),{signal:makeSignal(12000)});
       if(!r.ok) throw new Error('allorigins '+r.status);
       const d=await r.json(); return d.contents||'';
     },
-    // corsproxy.io — URL goes directly after ?
+    // corsproxy.io fallback
     async u=>{
       const r=await fetch('https://corsproxy.io/?'+encodeURIComponent(u),{signal:makeSignal(12000)});
       if(!r.ok) throw new Error('corsproxy '+r.status);
-      return r.text();
-    },
-    // codetabs proxy
-    async u=>{
-      const r=await fetch('https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u),{signal:makeSignal(12000)});
-      if(!r.ok) throw new Error('codetabs '+r.status);
       return r.text();
     }
   ];
@@ -1471,7 +1499,8 @@ document.addEventListener('DOMContentLoaded',()=>{
     localStorage.setItem(KEY_STORE,k);
     $('key-status').style.display='inline';
     $('key-saved-msg').style.display='block';
-    toast('API key saved');
+    updateSetupBanner();
+    toast('API key saved — brain is live');
   });
 
   // Pre-fill key field if saved
