@@ -363,7 +363,7 @@ select.inp{appearance:none;cursor:pointer}
         <div id="setup-banner" style="background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.28);border-radius:var(--radius);padding:16px;margin-bottom:20px">
           <p style="font-size:12px;font-weight:700;color:var(--gold);margin-bottom:8px">⬡ Two keys needed to get started</p>
           <div style="margin-bottom:10px">
-            <p style="font-size:11px;color:var(--text-mid);margin-bottom:5px"><span id="key-status-dot" style="font-size:8px">●</span> <strong style="color:var(--text)">Anthropic API Key</strong> — processes every thought with AI</p>
+            <p style="font-size:11px;color:var(--text-mid);margin-bottom:5px"><span id="key-status-dot" style="font-size:8px">●</span> <strong style="color:var(--text)">Gemini API Key</strong> — free at aistudio.google.com → processes every thought</p>
             <p style="font-size:11px;color:var(--text-mid)"><span style="font-size:8px;color:var(--text-dim)">●</span> <strong style="color:var(--text)">GitHub Token</strong> (optional) — lets you paste private repo URLs</p>
           </div>
           <p style="font-size:10px;color:var(--text-dim);margin-bottom:10px">Both are saved only in this browser — never sent anywhere except their own APIs.</p>
@@ -450,12 +450,13 @@ select.inp{appearance:none;cursor:pointer}
         <h2>Settings</h2>
         <p class="sub" style="font-size:11px;color:var(--text-dim);margin-bottom:24px">Your key is stored only in this browser. Never shared.</p>
 
-        <span class="section-label">Anthropic API Key</span>
+        <span class="section-label">Google Gemini API Key</span>
+        <p style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Get yours free at <strong style="color:var(--text-mid)">aistudio.google.com</strong> → Get API key. Starts with <code style="font-family:var(--font-mono);color:var(--text-mid)">AIza</code>.</p>
         <div style="display:flex;gap:8px">
-          <input id="settings-key" type="password" class="inp" placeholder="sk-ant-… or your key"/>
+          <input id="settings-key" type="password" class="inp" placeholder="AIza…"/>
           <button id="save-key" class="btn btn-primary">Save</button>
         </div>
-        <p id="key-saved-msg" style="font-size:11px;color:var(--green);margin-top:6px;display:none">✓ Key saved. Brain is live.</p>
+        <p id="key-saved-msg" style="font-size:11px;color:var(--green);margin-top:6px;display:none">✓ Gemini key saved. Brain is live.</p>
 
         <span class="section-label" style="display:block;margin-top:24px">GitHub Personal Access Token</span>
         <p style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Required to read private repos. Create one at github.com → Settings → Developer settings → Personal access tokens (scope: <code style="font-family:var(--font-mono);color:var(--text-mid)">repo</code>).</p>
@@ -501,6 +502,8 @@ select.inp{appearance:none;cursor:pointer}
 const STORAGE_KEY  = 'mind_brain_v3';
 const KEY_STORE    = 'mind_api_key';
 const GH_TOKEN_STORE = 'mind_gh_token';
+const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_URL   = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 const DOMAINS     = ['Geopolitics','Real Estate','Philosophy','Business','Vedic','Macro','Personal','Research','Other'];
 const DOMAIN_COLOR= {
   'Geopolitics':'#e85d4a','Real Estate':'#f4a261','Philosophy':'#a8dadc',
@@ -548,29 +551,35 @@ function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(
 // ═══════════════════════════════════════════════════════════════
 // API
 // ═══════════════════════════════════════════════════════════════
-async function callAI(messages, system){
-  if(!state.apiKey) throw new Error('No API key — go to ⚙ Settings and add your key.');
-  const r = await fetch('https://api.anthropic.com/v1/messages',{
+// Convert Anthropic-style content parts → Gemini parts array
+function toGeminiParts(content){
+  if(typeof content === 'string') return [{text: content}];
+  return content.map(p=>{
+    if(p.type==='text') return {text: p.text};
+    if(p.type==='image') return {inline_data:{mime_type:p.source.media_type, data:p.source.data}};
+    if(p.type==='document') return {inline_data:{mime_type:p.source.media_type, data:p.source.data}};
+    return {text: JSON.stringify(p)};
+  });
+}
+
+// contents must be [{role:'user'|'model', parts:[{text:...}|{inline_data:...}]}]
+async function callAI(contents, system){
+  if(!state.apiKey) throw new Error('No Gemini API key — go to ⚙ Settings and add your key.');
+  const r = await fetch(`${GEMINI_URL}?key=${encodeURIComponent(state.apiKey)}`,{
     method:'POST',
-    headers:{
-      'Content-Type':'application/json',
-      'x-api-key': state.apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    },
+    headers:{'Content-Type':'application/json'},
     body: JSON.stringify({
-      model:'claude-sonnet-4-6',
-      max_tokens:1000,
-      system,
-      messages
+      system_instruction:{parts:[{text: system}]},
+      contents,
+      generationConfig:{maxOutputTokens:2048}
     })
   });
   if(!r.ok){
     const e = await r.json().catch(()=>({}));
-    throw new Error(e?.error?.message || 'API error '+r.status);
+    throw new Error(e?.error?.message || 'Gemini API error '+r.status);
   }
   const d = await r.json();
-  return d.content?.[0]?.text || '';
+  return d.candidates?.[0]?.content?.parts?.[0]?.text || '';
 }
 
 async function processInput(content, existingThoughts){
@@ -593,8 +602,7 @@ Return exactly this JSON structure:
   "connections": ["summary fragments of existing thoughts this genuinely connects to"],
   "contradiction": "description of existing belief this contradicts, or null"
 }`;
-  const msgContent = Array.isArray(content) ? content : [{type:'text',text:content}];
-  const raw = await callAI([{role:'user',content:msgContent}], system);
+  const raw = await callAI([{role:'user', parts: toGeminiParts(content)}], system);
   try{
     return JSON.parse(raw.replace(/^```json|^```|```$/gm,'').trim());
   }catch{
@@ -628,8 +636,11 @@ RULES:
 - Speak as: "across your [N] thoughts..." or "your thinking on X suggests..."
 - Maximum 4 dense paragraphs. No filler. No pleasantries.`;
   const messages = [
-    ...state.chatHistory.slice(-8).map(m=>({role:m.role,content:m.content})),
-    {role:'user',content:userMsg}
+    ...state.chatHistory.slice(-8).map(m=>({
+      role: m.role==='assistant'?'model':m.role,
+      parts:[{text:m.content}]
+    })),
+    {role:'user', parts:[{text:userMsg}]}
   ];
   return callAI(messages, system);
 }
