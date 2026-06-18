@@ -51,7 +51,6 @@ input,textarea,select{font-family:var(--font-body);outline:none;color:var(--text
 }
 .nav-btn:hover{color:var(--text)}
 .nav-btn.active{background:var(--gold-glow);color:var(--gold);border-color:rgba(201,168,76,.2)}
-#key-area{display:flex;gap:6px;align-items:center;margin-left:6px}
 #key-status{font-size:10px;color:var(--green);white-space:nowrap}
 
 /* MAIN */
@@ -374,9 +373,10 @@ select.inp{appearance:none;cursor:pointer}
 
           <span class="section-label" style="display:block;margin-top:20px">URL / Article / Website</span>
           <div style="display:flex;gap:8px">
-            <input id="inp-url" class="inp" placeholder="https://…" style="flex:1"/>
+            <input id="inp-url" class="inp" placeholder="https://… or https://github.com/user/repo" style="flex:1"/>
             <button id="submit-url" class="btn btn-primary">Fetch</button>
           </div>
+          <p style="font-size:10px;color:var(--text-dim);margin-top:5px">For private GitHub repos: add your token in <button onclick="setView('settings')" style="background:none;border:none;color:var(--gold);font-size:10px;cursor:pointer;padding:0;text-decoration:underline">⚙ Settings</button></p>
 
           <span class="section-label" style="display:block;margin-top:20px">PDF / Image / Text File</span>
           <div id="drop-zone" class="drop-zone">
@@ -442,6 +442,14 @@ select.inp{appearance:none;cursor:pointer}
         </div>
         <p id="key-saved-msg" style="font-size:11px;color:var(--green);margin-top:6px;display:none">✓ Key saved. Brain is live.</p>
 
+        <span class="section-label" style="display:block;margin-top:24px">GitHub Personal Access Token</span>
+        <p style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Required to read private repos. Create one at github.com → Settings → Developer settings → Personal access tokens (scope: <code style="font-family:var(--font-mono);color:var(--text-mid)">repo</code>).</p>
+        <div style="display:flex;gap:8px">
+          <input id="gh-token-input" type="password" class="inp" placeholder="ghp_… or github_pat_…"/>
+          <button id="save-gh-token" class="btn btn-primary">Save</button>
+        </div>
+        <p id="gh-token-msg" style="font-size:11px;color:var(--green);margin-top:6px;display:none">✓ GitHub token saved.</p>
+
         <span class="section-label" style="display:block;margin-top:24px">Brain Data</span>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button id="export-btn" class="btn btn-ghost">⬇ Export JSON</button>
@@ -475,8 +483,9 @@ select.inp{appearance:none;cursor:pointer}
 // ═══════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════
-const STORAGE_KEY = 'mind_brain_v3';
-const KEY_STORE   = 'mind_api_key';
+const STORAGE_KEY  = 'mind_brain_v3';
+const KEY_STORE    = 'mind_api_key';
+const GH_TOKEN_STORE = 'mind_gh_token';
 const DOMAINS     = ['Geopolitics','Real Estate','Philosophy','Business','Vedic','Macro','Personal','Research','Other'];
 const DOMAIN_COLOR= {
   'Geopolitics':'#e85d4a','Real Estate':'#f4a261','Philosophy':'#a8dadc',
@@ -492,6 +501,7 @@ const dColor = d => DOMAIN_COLOR[d] || DOMAIN_COLOR['Other'];
 let state = {
   brain: loadBrain(),
   apiKey: localStorage.getItem(KEY_STORE) || '',
+  githubToken: localStorage.getItem(GH_TOKEN_STORE) || '',
   currentView: 'graph',
   selectedId: null,
   chatHistory: [],
@@ -511,8 +521,11 @@ let state = {
 // PERSISTENCE
 // ═══════════════════════════════════════════════════════════════
 function loadBrain(){
-  try{ return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {thoughts:[],edges:[]}; }
-  catch{ return {thoughts:[],edges:[]}; }
+  try{
+    const d=JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if(d&&Array.isArray(d.thoughts)&&Array.isArray(d.edges)) return d;
+    return {thoughts:[],edges:[]};
+  }catch{ return {thoughts:[],edges:[]}; }
 }
 function saveBrain(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.brain)); }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2); }
@@ -574,12 +587,17 @@ Return exactly this JSON structure:
 }
 
 async function chatWithBrain(userMsg){
-  const kb = state.brain.thoughts.map((t,i)=>
-    `[${i+1}][${t.domain}][${t.confidence}] ${t.summary}\n  Insight: ${t.keyInsight}\n  Implies: ${t.implication||'—'}`
-  ).join('\n\n');
+  const MAX_KB=6000;
+  let kb='', idx=0;
+  for(const t of state.brain.thoughts){
+    const e=`[${++idx}][${t.domain}][${t.confidence}] ${t.summary}\n  Insight: ${t.keyInsight}\n  Implies: ${t.implication||'—'}\n\n`;
+    if(kb.length+e.length>MAX_KB) break;
+    kb+=e;
+  }
+  kb=kb.trimEnd();
   const system = `You are the living intelligence of this person's second brain — the accumulated weight of everything they have ever thought, read, and believed.
 
-KNOWLEDGE BASE (${state.brain.thoughts.length} thoughts):
+KNOWLEDGE BASE (${state.brain.thoughts.length} thoughts${idx<state.brain.thoughts.length?`, showing first ${idx}`:''}):
 ${kb || 'Empty. Tell the user to add thoughts first via the Feed tab.'}
 
 RULES:
@@ -669,9 +687,34 @@ function deleteThought(id){
 // ═══════════════════════════════════════════════════════════════
 // GRAPH
 // ═══════════════════════════════════════════════════════════════
+function initGraphDefs(){
+  const svg=d3.select('#graph-svg');
+  if(svg.select('#graph-defs').node()) return;
+  const defs=svg.append('defs').attr('id','graph-defs');
+  Object.entries(DOMAIN_COLOR).forEach(([name,col])=>{
+    const k=name.replace(/\s/g,'');
+    const f=defs.append('filter').attr('id','glow-'+k)
+               .attr('x','-60%').attr('y','-60%').attr('width','220%').attr('height','220%');
+    f.append('feGaussianBlur').attr('stdDeviation','3.5').attr('result','blur');
+    const fm=f.append('feMerge');
+    fm.append('feMergeNode').attr('in','blur');
+    fm.append('feMergeNode').attr('in','SourceGraphic');
+  });
+  const sf=defs.append('filter').attr('id','glow-sel')
+             .attr('x','-80%').attr('y','-80%').attr('width','260%').attr('height','260%');
+  sf.append('feGaussianBlur').attr('stdDeviation','8').attr('result','blur');
+  const sfm=sf.append('feMerge');
+  sfm.append('feMergeNode').attr('in','blur'); sfm.append('feMergeNode').attr('in','SourceGraphic');
+  const gf=defs.append('filter').attr('id','glow-gold')
+             .attr('x','-60%').attr('y','-60%').attr('width','220%').attr('height','220%');
+  gf.append('feGaussianBlur').attr('stdDeviation','4').attr('result','blur');
+  const gfm=gf.append('feMerge');
+  gfm.append('feMergeNode').attr('in','blur'); gfm.append('feMergeNode').attr('in','SourceGraphic');
+}
+
 function renderGraph(){
   const svg = d3.select('#graph-svg');
-  svg.selectAll('*').remove();
+  svg.select('#graph-root').remove();
   if(state.sim){ state.sim.stop(); state.sim=null; }
   if(state.rafId){ cancelAnimationFrame(state.rafId); state.rafId=null; }
 
@@ -706,31 +749,6 @@ function renderGraph(){
     return;
   }
 
-  // Defs
-  const defs = svg.append('defs');
-  // Glow filters
-  Object.entries(DOMAIN_COLOR).forEach(([name,col])=>{
-    const k = name.replace(/\s/g,'');
-    const f = defs.append('filter').attr('id','glow-'+k)
-               .attr('x','-60%').attr('y','-60%').attr('width','220%').attr('height','220%');
-    f.append('feGaussianBlur').attr('stdDeviation','3.5').attr('result','blur');
-    const fm = f.append('feMerge');
-    fm.append('feMergeNode').attr('in','blur');
-    fm.append('feMergeNode').attr('in','SourceGraphic');
-  });
-  // Selected glow
-  const sf = defs.append('filter').attr('id','glow-sel')
-             .attr('x','-80%').attr('y','-80%').attr('width','260%').attr('height','260%');
-  sf.append('feGaussianBlur').attr('stdDeviation','8').attr('result','blur');
-  const sfm = sf.append('feMerge');
-  sfm.append('feMergeNode').attr('in','blur'); sfm.append('feMergeNode').attr('in','SourceGraphic');
-  // Gold glow
-  const gf = defs.append('filter').attr('id','glow-gold')
-             .attr('x','-60%').attr('y','-60%').attr('width','220%').attr('height','220%');
-  gf.append('feGaussianBlur').attr('stdDeviation','4').attr('result','blur');
-  const gfm = gf.append('feMerge');
-  gfm.append('feMergeNode').attr('in','blur'); gfm.append('feMergeNode').attr('in','SourceGraphic');
-
   const visIds = new Set(thoughts.map(t=>t.id));
   const nodes = thoughts.map(t=>({
     ...t,
@@ -738,7 +756,6 @@ function renderGraph(){
     _col: dColor(t.domain),
     _glow: 'glow-'+(t.domain||'Other').replace(/\s/g,'')
   }));
-  const nodeMap = Object.fromEntries(nodes.map(n=>[n.id,n]));
   const links = state.brain.edges
     .filter(e=>visIds.has(e.source)&&visIds.has(e.target))
     .map(e=>({...e}));
@@ -751,7 +768,7 @@ function renderGraph(){
     .force('collide', d3.forceCollide().radius(d=>d._r+20));
   state.sim = sim;
 
-  const root = svg.append('g');
+  const root = svg.append('g').attr('id','graph-root');
   svg.call(
     d3.zoom().scaleExtent([.2,4])
     .on('zoom', e=>root.attr('transform',e.transform))
@@ -813,28 +830,31 @@ function renderGraph(){
     nodeSel.attr('transform',d=>`translate(${d.x},${d.y})`);
   });
 
-  // Synaptic particles
-  const particles = [];
+  // Synaptic particles — fixed pool avoids DOM create/destroy every frame
+  const MAX_PT=30;
+  const particles=[];
+  const ptPool=Array.from({length:MAX_PT},()=>
+    partG.append('circle').attr('r',2.5).attr('opacity',0)
+  );
   function frame(){
-    if(links.length>0 && Math.random()<.05){
-      const l = links[Math.floor(Math.random()*links.length)];
-      particles.push({l, t:0, spd:.006+Math.random()*.012, col:l.type==='contradiction'?'#e85d4a':'#c9a84c'});
+    if(links.length>0 && Math.random()<.05 && particles.length<MAX_PT){
+      const l=links[Math.floor(Math.random()*links.length)];
+      particles.push({l,t:0,spd:.006+Math.random()*.012,col:l.type==='contradiction'?'#e85d4a':'#c9a84c'});
     }
     for(let i=particles.length-1;i>=0;i--){
-      particles[i].t += particles[i].spd;
+      particles[i].t+=particles[i].spd;
       if(particles[i].t>=1) particles.splice(i,1);
     }
-    partG.selectAll('circle.pt').remove();
-    particles.forEach(p=>{
-      const s=p.l.source, t=p.l.target;
-      if(!s.x||!t.x) return;
-      const x=s.x+(t.x-s.x)*p.t, y=s.y+(t.y-s.y)*p.t;
-      const op = p.t<.5 ? p.t*2 : (1-p.t)*2;
-      partG.append('circle').attr('class','pt')
-        .attr('cx',x).attr('cy',y).attr('r',2.5)
-        .attr('fill',p.col).attr('opacity',op);
+    ptPool.forEach((circle,i)=>{
+      const p=particles[i];
+      if(!p){ circle.attr('opacity',0); return; }
+      const s=p.l.source, tt=p.l.target;
+      if(!s.x||!tt.x){ circle.attr('opacity',0); return; }
+      const x=s.x+(tt.x-s.x)*p.t, y=s.y+(tt.y-s.y)*p.t;
+      const op=p.t<.5?p.t*2:(1-p.t)*2;
+      circle.attr('cx',x).attr('cy',y).attr('fill',p.col).attr('opacity',op);
     });
-    state.rafId = requestAnimationFrame(frame);
+    state.rafId=requestAnimationFrame(frame);
   }
   frame();
 }
@@ -864,7 +884,7 @@ function renderSidebar(){
           const oid=e.source===t.id?e.target:e.source;
           const ot=state.brain.thoughts.find(x=>x.id===oid); if(!ot) return '';
           const ec=dColor(ot.domain);
-          return `<div class="conn-card" onclick="state.selectedId='${ot.id}';renderSidebar();openModal(state.brain.thoughts.find(x=>x.id==='${ot.id}'))">
+          return `<div class="conn-card" onclick="selectAndOpen('${ot.id}')">
             <div style="flex-shrink:0;margin-top:3px"><div style="width:9px;height:9px;border-radius:50%;background:${ec};box-shadow:0 0 5px ${ec}"></div></div>
             <div style="flex:1;min-width:0">
               <span style="font-size:9px;color:${e.type==='contradiction'?'var(--red)':'var(--gold)'};font-weight:700">${e.type==='contradiction'?'⚡ contradicts':'⟷ connects'}</span>
@@ -960,7 +980,7 @@ function openModal(t){
     body += `<span class="section-label">Connected Thoughts (${connected.length})</span>`;
     connected.forEach(({thought:ct,type})=>{
       const cc=dColor(ct.domain);
-      body += `<div class="conn-card" onclick="openModal(state.brain.thoughts.find(x=>x.id==='${ct.id}'))" style="border-color:${type==='contradiction'?'rgba(232,93,74,.3)':cc+'33'}">
+      body += `<div class="conn-card" onclick="selectAndOpen('${ct.id}')" style="border-color:${type==='contradiction'?'rgba(232,93,74,.3)':cc+'33'}">
         <div style="flex-shrink:0;margin-top:3px"><div style="width:10px;height:10px;border-radius:50%;background:${cc};box-shadow:0 0 7px ${cc}"></div></div>
         <div style="flex:1;min-width:0">
           <div style="display:flex;gap:7px;margin-bottom:5px;flex-wrap:wrap">
@@ -1003,6 +1023,13 @@ function openModal(t){
 
 function closeModal(){
   $('modal-backdrop').classList.remove('show');
+}
+function selectAndOpen(id){
+  const t=state.brain.thoughts.find(x=>x.id===id);
+  if(!t) return;
+  state.selectedId=id;
+  openModal(t);
+  if(state.currentView==='graph') renderSidebar();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1050,7 +1077,7 @@ function renderLibrary(){
   grid.innerHTML=thoughts.map(t=>{
     const col=dColor(t.domain);
     const connCount=state.brain.edges.filter(e=>e.source===t.id||e.target===t.id).length;
-    return `<div class="t-card${state.selectedId===t.id?' selected':''}" onclick="state.selectedId='${t.id}';openModal(state.brain.thoughts.find(x=>x.id==='${t.id}'));renderLibrary()">
+    return `<div class="t-card${state.selectedId===t.id?' selected':''}" onclick="selectAndOpen('${t.id}');renderLibrary()">
       <div style="display:flex;justify-content:space-between;margin-bottom:8px">
         <span class="tag" style="background:${col}22;color:${col};border:1px solid ${col}33">${t.domain}</span>
         <span style="font-size:9px;color:var(--text-dim)">${new Date(t.timestamp).toLocaleDateString('en-IN',{day:'numeric',month:'short'})}</span>
@@ -1266,9 +1293,132 @@ function toast(msg){
 function showProc(v,status=''){
   const po=$('proc-overlay'), ff=$('feed-form');
   if(!po||!ff) return;
-  po.style.display=v?'flex':'none';
+  po.classList.toggle('show',v);
   ff.style.display=v?'none':'block';
   if(status) $('proc-status').textContent=status;
+}
+function debounce(fn,ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; }
+
+// ═══════════════════════════════════════════════════════════════
+// URL FETCHER — GitHub-aware with token support
+// ═══════════════════════════════════════════════════════════════
+function ghHeaders(){
+  const h={'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};
+  if(state.githubToken) h['Authorization']='Bearer '+state.githubToken;
+  return h;
+}
+function ghErrMsg(status){
+  if(status===404) return 'Not found. If this is a private repo, add your GitHub token in ⚙ Settings.';
+  if(status===401||status===403) return 'Access denied — add your GitHub token in ⚙ Settings.';
+  return 'GitHub API error '+status+'.';
+}
+function b64decode(str){
+  try{ return atob(str.replace(/\n/g,'')); }catch{ return ''; }
+}
+
+async function fetchURL(url){
+  // ── GitHub blob file: github.com/{owner}/{repo}/blob/{branch}/{path} ──
+  const blobMatch = url.match(/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+?)(?:\?.*)?$/);
+  if(blobMatch){
+    const [,owner,repo,branch,path] = blobMatch;
+    showProc(true,'Reading GitHub file…');
+    const apiUrl=`https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`;
+    const r=await fetch(apiUrl,{headers:ghHeaders()});
+    if(!r.ok) throw new Error(ghErrMsg(r.status));
+    const d=await r.json();
+    if(!d.content) throw new Error('File has no readable content (may be binary or too large).');
+    return b64decode(d.content).slice(0,8000);
+  }
+
+  // ── raw.githubusercontent.com ──
+  if(/raw\.githubusercontent\.com/.test(url)){
+    const r=await fetch(url);
+    if(r.ok) return (await r.text()).slice(0,8000);
+    // Private — fall back to Contents API
+    const m=url.match(/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)/);
+    if(m){
+      const [,owner,repo,branch,path]=m;
+      const ar=await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`,{headers:ghHeaders()});
+      if(!ar.ok) throw new Error(ghErrMsg(ar.status));
+      const d=await ar.json();
+      return b64decode(d.content||'').slice(0,8000);
+    }
+    throw new Error('Could not fetch raw file.');
+  }
+
+  // ── GitHub repo root or tree ──
+  const repoMatch = url.match(/github\.com\/([^/?\s#]+)\/([^/?\s#]+)/);
+  if(repoMatch){
+    const [,owner,repo]=repoMatch;
+    showProc(true,'Reading GitHub repo…');
+    const apiBase=`https://api.github.com/repos/${owner}/${repo}`;
+    const [metaRes,readmeRes]=await Promise.all([
+      fetch(apiBase,{headers:ghHeaders()}),
+      fetch(apiBase+'/readme',{headers:ghHeaders()})
+    ]);
+    if(!metaRes.ok) throw new Error(ghErrMsg(metaRes.status));
+    const meta=await metaRes.json();
+    let readmeText='';
+    if(readmeRes.ok){
+      const rd=await readmeRes.json();
+      readmeText=b64decode(rd.content||'').slice(0,4000);
+    }
+    // Fetch file tree for context
+    let fileList='';
+    const treeRes=await fetch(`${apiBase}/git/trees/${meta.default_branch}?recursive=1`,{headers:ghHeaders()});
+    if(treeRes.ok){
+      const tree=await treeRes.json();
+      const files=(tree.tree||[]).filter(f=>f.type==='blob').map(f=>f.path).slice(0,60);
+      if(files.length) fileList='\n\nFile tree:\n'+files.join('\n');
+    }
+    return `GITHUB REPO: ${meta.full_name}
+Description: ${meta.description||'—'}
+Language: ${meta.language||'—'}
+Stars: ${meta.stargazers_count} | Forks: ${meta.forks_count}
+Topics: ${(meta.topics||[]).join(', ')||'—'}
+Default branch: ${meta.default_branch}${meta.homepage?'\nWebsite: '+meta.homepage:''}
+
+README:
+${readmeText||'(no readme)'}${fileList}`;
+  }
+
+  // ── Generic URL — CORS proxies with fallbacks ──
+  function makeSignal(ms){ try{ return AbortSignal.timeout(ms); }catch{ return undefined; } }
+  function stripHtml(raw){
+    return raw.replace(/<script[\s\S]*?<\/script>/gi,'')
+              .replace(/<style[\s\S]*?<\/style>/gi,'')
+              .replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ')
+              .replace(/\s+/g,' ').trim();
+  }
+  const proxies=[
+    // allorigins — returns JSON wrapper
+    async u=>{
+      const r=await fetch('https://api.allorigins.win/get?url='+encodeURIComponent(u),{signal:makeSignal(12000)});
+      if(!r.ok) throw new Error('allorigins '+r.status);
+      const d=await r.json(); return d.contents||'';
+    },
+    // corsproxy.io — returns raw response (URL goes directly after ?)
+    async u=>{
+      const r=await fetch('https://corsproxy.io/?'+encodeURIComponent(u),{signal:makeSignal(12000)});
+      if(!r.ok) throw new Error('corsproxy '+r.status);
+      return r.text();
+    },
+    // codetabs — another public proxy
+    async u=>{
+      const r=await fetch('https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u),{signal:makeSignal(12000)});
+      if(!r.ok) throw new Error('codetabs '+r.status);
+      return r.text();
+    }
+  ];
+  let lastErr='all proxies failed';
+  for(const proxy of proxies){
+    try{
+      const raw=await proxy(url);
+      const text=stripHtml(raw);
+      if(text.length>80) return text.slice(0,6000);
+    }catch(e){ lastErr=e.message; }
+  }
+  throw new Error('Could not fetch URL — '+lastErr+'. Try pasting the content directly.');
 }
 
 // Export / Import / Clear
@@ -1319,6 +1469,20 @@ document.addEventListener('DOMContentLoaded',()=>{
     $('key-status').style.display='inline';
   }
 
+  // GitHub token save
+  $('save-gh-token').addEventListener('click',()=>{
+    const k=$('gh-token-input').value.trim();
+    state.githubToken=k;
+    if(k) localStorage.setItem(GH_TOKEN_STORE,k);
+    else localStorage.removeItem(GH_TOKEN_STORE);
+    $('gh-token-msg').style.display='block';
+    $('gh-token-msg').textContent=k?'✓ GitHub token saved.':'GitHub token cleared.';
+    toast(k?'GitHub token saved':'GitHub token cleared');
+  });
+
+  // Pre-fill GitHub token if saved
+  if(state.githubToken) $('gh-token-input').value=state.githubToken;
+
   // Error close
   $('error-close').addEventListener('click',hideError);
 
@@ -1336,11 +1500,9 @@ document.addEventListener('DOMContentLoaded',()=>{
     if(!url){ showError('Enter a URL.'); return; }
     showProc(true,'Fetching URL…');
     try{
-      const r=await fetch('https://api.allorigins.win/get?url='+encodeURIComponent(url));
-      const d=await r.json();
-      const text=(d.contents||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,6000);
+      const text = await fetchURL(url);
       await addThought('SOURCE: '+url+'\n\n'+text);
-    }catch(e){ showError('Could not fetch URL. Paste the text manually.'); showProc(false); }
+    }catch(e){ showError(e.message||'Could not fetch URL. Paste the text manually.'); showProc(false); }
   });
   $('inp-url').addEventListener('keydown',e=>{ if(e.key==='Enter') $('submit-url').click(); });
 
@@ -1363,11 +1525,11 @@ document.addEventListener('DOMContentLoaded',()=>{
   });
 
   // Graph filters
-  $('graph-search').addEventListener('input',e=>{ state.searchGraph=e.target.value; renderGraph(); });
+  $('graph-search').addEventListener('input',debounce(e=>{ state.searchGraph=e.target.value; renderGraph(); },200));
   $('graph-domain-filter').addEventListener('change',e=>{ state.domainFilter=e.target.value; renderGraph(); });
 
   // Library filters
-  $('lib-search').addEventListener('input',e=>{ state.libSearch=e.target.value; renderLibrary(); });
+  $('lib-search').addEventListener('input',debounce(e=>{ state.libSearch=e.target.value; renderLibrary(); },200));
   $('lib-domain').addEventListener('change',e=>{ state.libDomain=e.target.value; renderLibrary(); });
   $('lib-sort').addEventListener('change',e=>{ state.libSort=e.target.value; renderLibrary(); });
 
@@ -1389,6 +1551,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   window.addEventListener('resize',()=>{ if(state.currentView==='graph') renderGraph(); });
 
   // Initial render
+  initGraphDefs();
   populateDomainFilters();
   renderAll();
 });
