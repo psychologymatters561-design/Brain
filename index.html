@@ -1271,6 +1271,75 @@ function showProc(v,status=''){
   if(status) $('proc-status').textContent=status;
 }
 
+// ═══════════════════════════════════════════════════════════════
+// URL FETCHER — GitHub-aware
+// ═══════════════════════════════════════════════════════════════
+async function fetchURL(url){
+  // ── GitHub repo: github.com/{owner}/{repo} ──
+  const ghRepo = url.match(/github\.com\/([^/]+)\/([^/?\s#]+)(?:\/tree\/([^/?\s#]+))?(?:\/([^?\s#]*))?/);
+  if(ghRepo){
+    const [,owner,repo,branch,subpath] = ghRepo;
+
+    // Raw file: github.com/…/blob/{branch}/{path}
+    const blobMatch = url.match(/github\.com\/[^/]+\/[^/]+\/blob\/([^/]+)\/(.+)/);
+    if(blobMatch){
+      const [,br,path] = blobMatch;
+      const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${br}/${path}`;
+      const r = await fetch(rawUrl);
+      if(!r.ok) throw new Error(`GitHub raw fetch failed: ${r.status}`);
+      return (await r.text()).slice(0,8000);
+    }
+
+    // Raw file URL already
+    if(url.includes('raw.githubusercontent.com')){
+      const r = await fetch(url);
+      if(!r.ok) throw new Error(`Fetch failed: ${r.status}`);
+      return (await r.text()).slice(0,8000);
+    }
+
+    // Repo root or tree — fetch meta + README via GitHub API
+    showProc(true,'Reading GitHub repo…');
+    const apiBase = `https://api.github.com/repos/${owner}/${repo}`;
+    const headers = {'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};
+    const [metaRes, readmeRes] = await Promise.all([
+      fetch(apiBase, {headers}),
+      fetch(`${apiBase}/readme`, {headers})
+    ]);
+    if(!metaRes.ok) throw new Error(`GitHub API error ${metaRes.status} — repo may be private or not exist.`);
+    const meta = await metaRes.json();
+    let readmeText = '';
+    if(readmeRes.ok){
+      const rdJson = await readmeRes.json();
+      readmeText = atob(rdJson.content.replace(/\n/g,'')).slice(0,4000);
+    }
+    // If subpath specified, also try to fetch that file
+    let fileText = '';
+    if(subpath){
+      const targetBranch = branch || meta.default_branch;
+      const rawFile = `https://raw.githubusercontent.com/${owner}/${repo}/${targetBranch}/${subpath}`;
+      const fr = await fetch(rawFile);
+      if(fr.ok) fileText = '\n\nFILE ('+subpath+'):\n'+(await fr.text()).slice(0,3000);
+    }
+    return `GITHUB REPO: ${meta.full_name}
+Description: ${meta.description||'—'}
+Language: ${meta.language||'—'}
+Stars: ${meta.stargazers_count} | Forks: ${meta.forks_count}
+Topics: ${(meta.topics||[]).join(', ')||'—'}
+Default branch: ${meta.default_branch}
+
+README:
+${readmeText||'(no readme)'}${fileText}`;
+  }
+
+  // ── Generic URL — CORS proxy ──
+  const r = await fetch('https://api.allorigins.win/get?url='+encodeURIComponent(url));
+  if(!r.ok) throw new Error('Could not fetch URL. Paste the text manually.');
+  const d = await r.json();
+  const text = (d.contents||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+  if(!text) throw new Error('No readable content found at that URL. Try pasting the text directly.');
+  return text.slice(0,6000);
+}
+
 // Export / Import / Clear
 function exportBrain(){
   const data=JSON.stringify(state.brain,null,2);
@@ -1336,11 +1405,9 @@ document.addEventListener('DOMContentLoaded',()=>{
     if(!url){ showError('Enter a URL.'); return; }
     showProc(true,'Fetching URL…');
     try{
-      const r=await fetch('https://api.allorigins.win/get?url='+encodeURIComponent(url));
-      const d=await r.json();
-      const text=(d.contents||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,6000);
+      const text = await fetchURL(url);
       await addThought('SOURCE: '+url+'\n\n'+text);
-    }catch(e){ showError('Could not fetch URL. Paste the text manually.'); showProc(false); }
+    }catch(e){ showError(e.message||'Could not fetch URL. Paste the text manually.'); showProc(false); }
   });
   $('inp-url').addEventListener('keydown',e=>{ if(e.key==='Enter') $('submit-url').click(); });
 
