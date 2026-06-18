@@ -1,0 +1,1397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<title>MIND — Personal Brain</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@400;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+/* ── RESET & TOKENS ─────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#06060f;--surf:#0d0d1e;--surf2:#12122a;--surf3:#17173a;
+  --border:#1a1a35;--border2:#2a2a50;
+  --gold:#c9a84c;--gold-dim:#7a6130;--gold-glow:rgba(201,168,76,.18);
+  --text:#e8e8f0;--text-mid:#9898b8;--text-dim:#5a5a7a;
+  --red:#e85d4a;--green:#80ed99;--blue:#48cae4;--purple:#c77dff;--orange:#f4a261;
+  --radius:10px;--radius-sm:7px;--radius-lg:16px;
+  --font-display:'Fraunces',Georgia,serif;
+  --font-body:'Inter',sans-serif;
+  --font-mono:'JetBrains Mono','Courier New',monospace;
+}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--font-body)}
+button{font-family:var(--font-body);cursor:pointer;border:none;outline:none}
+input,textarea,select{font-family:var(--font-body);outline:none;color:var(--text)}
+::-webkit-scrollbar{width:3px;height:3px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+::selection{background:var(--gold-glow);color:var(--gold)}
+
+/* ── LAYOUT ──────────────────────────────────────────────────── */
+#app{display:flex;flex-direction:column;height:100vh;width:100vw;overflow:hidden}
+
+/* HEADER */
+#header{
+  height:52px;min-height:52px;
+  display:flex;align-items:center;gap:10px;
+  padding:0 16px;
+  background:var(--surf);
+  border-bottom:1px solid var(--border);
+  z-index:100;flex-shrink:0;
+}
+#logo{font-family:var(--font-display);font-size:16px;font-weight:700;color:var(--gold);letter-spacing:.06em;white-space:nowrap}
+#brain-stats{font-size:10px;color:var(--text-dim);white-space:nowrap}
+#nav{display:flex;gap:3px;margin-left:auto}
+.nav-btn{
+  padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;
+  background:transparent;color:var(--text-dim);letter-spacing:.03em;
+  transition:all .18s;border:1px solid transparent;
+}
+.nav-btn:hover{color:var(--text)}
+.nav-btn.active{background:var(--gold-glow);color:var(--gold);border-color:rgba(201,168,76,.2)}
+#key-area{display:flex;gap:6px;align-items:center;margin-left:6px}
+#key-status{font-size:10px;color:var(--green);white-space:nowrap}
+
+/* MAIN */
+#main{flex:1;display:flex;overflow:hidden;position:relative}
+
+/* ERROR BAR */
+#error-bar{
+  display:none;align-items:center;gap:8px;
+  padding:7px 16px;font-size:12px;color:var(--red);
+  background:rgba(232,93,74,.1);border-bottom:1px solid rgba(232,93,74,.2);
+  flex-shrink:0;
+}
+#error-bar.show{display:flex}
+#error-close{background:none;border:none;color:var(--red);font-size:15px;margin-left:auto}
+
+/* TOAST */
+#toast{
+  position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);
+  background:var(--surf2);border:1px solid var(--border2);
+  padding:10px 20px;border-radius:20px;font-size:12px;color:var(--text-mid);
+  opacity:0;transition:all .3s;pointer-events:none;z-index:9999;white-space:nowrap;
+}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ── VIEWS ────────────────────────────────────────────────────── */
+.view{display:none;flex:1;overflow:hidden}
+.view.active{display:flex}
+
+/* ── GRAPH VIEW ───────────────────────────────────────────────── */
+#view-graph{flex-direction:row}
+#graph-area{flex:1;position:relative;overflow:hidden;background:var(--bg)}
+#graph-svg{width:100%;height:100%}
+#graph-overlay-tl{position:absolute;top:12px;left:12px;display:flex;gap:8px;z-index:10}
+#graph-overlay-bl{position:absolute;bottom:12px;left:12px;display:flex;gap:7px;z-index:10}
+#graph-hint{position:absolute;bottom:12px;right:12px;font-size:10px;color:var(--text-dim);background:rgba(13,13,30,.9);padding:5px 10px;border-radius:6px;border:1px solid var(--border);z-index:10}
+
+/* GRAPH SIDEBAR */
+#graph-sidebar{
+  width:272px;flex-shrink:0;
+  border-left:1px solid var(--border);
+  background:var(--surf);
+  display:flex;flex-direction:column;
+  overflow:hidden;
+}
+#sidebar-content{flex:1;overflow-y:auto;padding:14px}
+#sidebar-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:10px}
+#sidebar-empty .dot{width:40px;height:40px;border-radius:50%;border:1px solid var(--border);display:flex;align-items:center;justify-content:center}
+#sidebar-empty p{font-size:11px;color:var(--text-dim);text-align:center;line-height:1.8}
+
+/* ── FEED VIEW ────────────────────────────────────────────────── */
+#view-feed{justify-content:center;overflow-y:auto;padding:28px 16px}
+#feed-inner{width:100%;max-width:560px}
+#feed-inner h2{font-family:var(--font-display);font-size:18px;color:var(--gold);margin-bottom:4px}
+#feed-inner .sub{font-size:11px;color:var(--text-dim);margin-bottom:24px}
+
+/* Processing overlay */
+#proc-overlay{display:none;flex-direction:column;align-items:center;justify-content:center;padding:60px 0;gap:14px}
+#proc-overlay.show{display:flex}
+#proc-spinner{font-size:30px;animation:spin 2s linear infinite;display:inline-block;color:var(--gold)}
+#proc-status{font-size:13px;color:var(--gold)}
+@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+
+/* ── CHAT VIEW ────────────────────────────────────────────────── */
+#view-chat{flex-direction:column}
+#chat-messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+#chat-empty{text-align:center;padding:40px 20px}
+#chat-empty h3{font-family:var(--font-display);font-size:15px;color:var(--gold);margin-bottom:8px}
+#chat-empty p{font-size:12px;color:var(--text-dim);line-height:1.9}
+.chat-suggestion{
+  background:var(--surf2);border:1px solid var(--border);border-radius:8px;
+  padding:8px 14px;margin:5px auto;max-width:340px;cursor:pointer;
+  font-size:11px;color:var(--text-mid);transition:all .18s;display:block;text-align:left;
+}
+.chat-suggestion:hover{border-color:var(--border2);color:var(--text)}
+.bubble{
+  max-width:84%;padding:10px 14px;font-size:13px;line-height:1.65;
+  white-space:pre-wrap;word-break:break-word;
+}
+.bubble.user{
+  align-self:flex-end;
+  background:var(--gold-glow);border:1px solid rgba(201,168,76,.25);
+  border-radius:16px 16px 4px 16px;color:var(--text);
+}
+.bubble.ai{
+  align-self:flex-start;
+  background:var(--surf2);border:1px solid var(--border);
+  border-radius:16px 16px 16px 4px;color:var(--text);
+}
+.bubble.typing{color:var(--text-dim);font-style:italic}
+#chat-bar{
+  border-top:1px solid var(--border);padding:10px 12px;
+  display:flex;gap:8px;background:var(--surf);flex-shrink:0;
+}
+
+/* ── LIBRARY VIEW ─────────────────────────────────────────────── */
+#view-library{overflow-y:auto;padding:20px}
+#library-inner{max-width:780px;margin:0 auto}
+#library-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px}
+#library-header h2{font-family:var(--font-display);font-size:16px;color:var(--gold)}
+#library-controls{display:flex;gap:8px;flex-wrap:wrap}
+#domain-pills{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:16px}
+.dpill{
+  padding:4px 12px;border-radius:20px;font-size:10px;font-weight:700;cursor:pointer;
+  transition:all .18s;border:1px solid transparent;letter-spacing:.04em;
+}
+#thought-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}
+.t-card{
+  background:var(--surf);border:1px solid var(--border);border-radius:var(--radius);
+  padding:14px;cursor:pointer;transition:all .2s;
+}
+.t-card:hover{border-color:var(--border2);background:var(--surf2);transform:translateY(-1px)}
+.t-card.selected{border-color:rgba(201,168,76,.4);background:rgba(201,168,76,.05)}
+
+/* ── SETTINGS VIEW ────────────────────────────────────────────── */
+#view-settings{justify-content:center;overflow-y:auto;padding:28px 16px}
+#settings-inner{width:100%;max-width:500px}
+#settings-inner h2{font-family:var(--font-display);font-size:18px;color:var(--gold);margin-bottom:4px}
+
+/* ── MODAL ────────────────────────────────────────────────────── */
+#modal-backdrop{
+  display:none;position:fixed;inset:0;
+  background:rgba(0,0,0,.78);backdrop-filter:blur(8px);
+  z-index:1000;align-items:center;justify-content:center;padding:20px;
+}
+#modal-backdrop.show{display:flex}
+#modal{
+  width:100%;max-width:800px;max-height:92vh;
+  background:var(--surf);border-radius:var(--radius-lg);
+  display:flex;flex-direction:column;overflow:hidden;
+  animation:modal-in .22s ease;
+  box-shadow:0 0 80px rgba(0,0,0,.6);
+}
+@keyframes modal-in{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+#modal-header{
+  padding:20px 22px 16px;border-bottom:1px solid var(--border);
+  background:var(--surf2);flex-shrink:0;
+}
+#modal-body{flex:1;overflow-y:auto;padding:22px}
+#modal-footer{
+  padding:14px 22px;border-top:1px solid var(--border);
+  background:var(--surf2);flex-shrink:0;
+  display:flex;justify-content:space-between;align-items:center;
+}
+
+/* ── SHARED COMPONENTS ────────────────────────────────────────── */
+.tag{
+  display:inline-block;padding:2px 9px;border-radius:20px;
+  font-size:10px;font-weight:700;letter-spacing:.04em;
+  margin-right:4px;margin-bottom:3px;
+}
+.pill{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:3px 10px;border-radius:20px;font-size:10px;font-weight:600;
+}
+.section-label{
+  font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--text-dim);margin-bottom:7px;margin-top:18px;display:block;
+}
+.insight-block{border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:10px}
+.block-quote{
+  background:#07070e;border-left:3px solid var(--gold);
+  border-radius:0 var(--radius-sm) var(--radius-sm) 0;
+  padding:14px 16px;font-family:var(--font-display);font-size:13px;
+  color:var(--text-mid);line-height:1.8;white-space:pre-wrap;word-break:break-word;
+}
+.conn-card{
+  background:#09091a;border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:11px 12px;cursor:pointer;transition:all .18s;margin-bottom:8px;
+  display:flex;gap:10px;align-items:flex-start;
+}
+.conn-card:hover{border-color:var(--border2);background:#0f0f22;transform:translateX(2px)}
+.source-box{
+  background:#07070e;border:1px solid var(--border);
+  border-radius:var(--radius);overflow:hidden;margin-top:4px;
+}
+.source-header{
+  padding:7px 14px;border-bottom:1px solid var(--border);
+  display:flex;justify-content:space-between;align-items:center;
+  background:var(--surf2);
+}
+.source-pre{
+  padding:14px;max-height:180px;overflow-y:auto;
+  font-family:var(--font-mono);font-size:11px;
+  color:var(--text-mid);line-height:1.7;
+  white-space:pre-wrap;word-break:break-word;
+}
+.btn{
+  padding:8px 18px;border-radius:var(--radius-sm);font-size:12px;font-weight:600;
+  transition:all .18s;display:inline-flex;align-items:center;gap:5px;
+  white-space:nowrap;border:none;
+}
+.btn-primary{background:var(--gold);color:#07070f}
+.btn-primary:hover{opacity:.88}
+.btn-ghost{background:var(--surf3);color:var(--text-dim);border:1px solid var(--border)}
+.btn-ghost:hover{color:var(--text);border-color:var(--border2)}
+.btn-danger{background:rgba(232,93,74,.12);color:var(--red);border:1px solid rgba(232,93,74,.25)}
+.btn-danger:hover{background:rgba(232,93,74,.2)}
+.btn-icon{padding:8px 10px}
+.inp{
+  width:100%;background:#09091a;border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:9px 12px;font-size:13px;color:var(--text);transition:border-color .2s;
+}
+.inp:focus{border-color:rgba(201,168,76,.5)}
+.inp-sm{padding:6px 10px;font-size:11px}
+textarea.inp{resize:vertical;min-height:90px}
+select.inp{appearance:none;cursor:pointer}
+.drop-zone{
+  border:2px dashed var(--border);border-radius:var(--radius);
+  padding:24px;text-align:center;cursor:pointer;transition:border-color .2s;
+}
+.drop-zone:hover,.drop-zone.drag{border-color:rgba(201,168,76,.4)}
+.voice-btn{
+  padding:9px 11px;border-radius:var(--radius-sm);font-size:15px;
+  background:var(--surf3);border:1px solid var(--border);
+  color:var(--text-dim);transition:all .18s;flex-shrink:0;
+}
+.voice-btn.active{background:rgba(232,93,74,.15);border-color:rgba(232,93,74,.4);color:var(--red)}
+.stat-pill{
+  display:flex;flex-direction:column;align-items:center;
+  padding:7px 14px;background:#09091a;border-radius:var(--radius-sm);
+  border:1px solid var(--border);
+}
+.stat-pill .num{font-size:18px;font-weight:700;line-height:1.1}
+.stat-pill .lbl{font-size:8px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.1em;margin-top:2px}
+
+/* ── MOBILE ────────────────────────────────────────────────────── */
+@media(max-width:700px){
+  #graph-sidebar{display:none}
+  #nav{gap:1px}
+  .nav-btn{padding:5px 8px;font-size:10px}
+  #logo{font-size:13px}
+  #brain-stats{display:none}
+  #thought-grid{grid-template-columns:1fr}
+  #library-controls{flex-wrap:wrap}
+  #modal{max-height:96vh}
+  #view-feed{padding:16px 12px}
+  #feed-inner{max-width:100%}
+}
+@media(max-width:480px){
+  #header{padding:0 10px;gap:6px}
+  .nav-btn{padding:4px 7px;font-size:10px;letter-spacing:0}
+  #modal-body{padding:16px}
+  #modal-header{padding:14px 16px 12px}
+}
+
+/* ── ANIMATIONS ────────────────────────────────────────────────── */
+@keyframes fade-in{from{opacity:0}to{opacity:1}}
+@keyframes slide-up{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.fade-in{animation:fade-in .25s ease}
+.slide-up{animation:slide-up .2s ease}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- HEADER -->
+  <div id="header">
+    <span id="logo">⬡ MIND</span>
+    <span id="brain-stats">0 thoughts</span>
+    <nav id="nav">
+      <button class="nav-btn active" data-view="graph">◉ Map</button>
+      <button class="nav-btn" data-view="feed">＋ Feed</button>
+      <button class="nav-btn" data-view="chat">◈ Think</button>
+      <button class="nav-btn" data-view="library">≡ Library</button>
+      <button class="nav-btn" data-view="settings">⚙</button>
+    </nav>
+    <span id="key-status" style="display:none">● Live</span>
+  </div>
+
+  <!-- ERROR BAR -->
+  <div id="error-bar">
+    <span>⚠</span>
+    <span id="error-text"></span>
+    <button id="error-close">✕</button>
+  </div>
+
+  <!-- MAIN -->
+  <div id="main">
+
+    <!-- ══ MAP VIEW ══ -->
+    <div id="view-graph" class="view active">
+      <div id="graph-area">
+        <svg id="graph-svg"></svg>
+        <div id="graph-overlay-tl">
+          <input id="graph-search" class="inp inp-sm" placeholder="Search…" style="width:150px;background:rgba(9,9,26,.92)"/>
+          <select id="graph-domain-filter" class="inp inp-sm" style="width:120px;background:rgba(9,9,26,.92)">
+            <option value="All">All domains</option>
+          </select>
+        </div>
+        <div id="graph-overlay-bl"></div>
+        <div id="graph-hint">Click a node to explore</div>
+      </div>
+      <div id="graph-sidebar">
+        <div id="sidebar-content">
+          <div id="sidebar-empty">
+            <div class="dot"><div style="width:7px;height:7px;border-radius:50%;background:var(--gold);opacity:.4"></div></div>
+            <p>Select a node<br/>to inspect</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ FEED VIEW ══ -->
+    <div id="view-feed" class="view">
+      <div id="feed-inner">
+        <h2>Feed Your Brain</h2>
+        <p class="sub">Every input is read, analysed, connected, and stored permanently.</p>
+        <div id="proc-overlay">
+          <span id="proc-spinner">⬡</span>
+          <span id="proc-status">Processing…</span>
+        </div>
+        <div id="feed-form">
+          <span class="section-label">Thought / Voice</span>
+          <div style="position:relative">
+            <textarea id="inp-text" class="inp" placeholder="Speak or type — a theory, belief, observation, half-formed idea…" rows="4" style="padding-right:46px"></textarea>
+            <button id="voice-text-btn" class="voice-btn" style="position:absolute;right:9px;top:9px;padding:6px 9px">🎙</button>
+          </div>
+          <div id="voice-indicator" style="display:none;font-size:10px;color:var(--red);margin-top:3px">● Listening…</div>
+          <button id="submit-text" class="btn btn-primary" style="margin-top:9px">Process Thought →</button>
+
+          <span class="section-label" style="display:block;margin-top:20px">URL / Article / Website</span>
+          <div style="display:flex;gap:8px">
+            <input id="inp-url" class="inp" placeholder="https://…" style="flex:1"/>
+            <button id="submit-url" class="btn btn-primary">Fetch</button>
+          </div>
+
+          <span class="section-label" style="display:block;margin-top:20px">PDF / Image / Text File</span>
+          <div id="drop-zone" class="drop-zone">
+            <p style="color:var(--text-dim);font-size:12px;margin:0">📎 Drop PDF, image, or text file<br/><span style="font-size:10px">or tap to browse</span></p>
+          </div>
+          <input id="file-input" type="file" accept=".pdf,.txt,.md,image/*" style="display:none"/>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ CHAT VIEW ══ -->
+    <div id="view-chat" class="view">
+      <div id="chat-messages">
+        <div id="chat-empty">
+          <h3>Your Brain Awaits</h3>
+          <p>It holds everything you've fed it.<br/>Ask it to think with you.</p>
+          <div style="margin-top:14px">
+            <button class="chat-suggestion" data-q="What patterns connect my strongest beliefs?">What patterns connect my strongest beliefs?</button>
+            <button class="chat-suggestion" data-q="Where do my theories contradict each other?">Where do my theories contradict each other?</button>
+            <button class="chat-suggestion" data-q="What is my core thesis on India's future?">What is my core thesis on India's future?</button>
+            <button class="chat-suggestion" data-q="Synthesise everything I know about capital flows.">Synthesise everything I know about capital flows.</button>
+          </div>
+        </div>
+      </div>
+      <div id="chat-bar">
+        <button id="voice-chat-btn" class="voice-btn">🎙</button>
+        <input id="chat-input" class="inp" placeholder="Ask your brain anything…" style="flex:1"/>
+        <button id="chat-send" class="btn btn-primary">Send</button>
+      </div>
+    </div>
+
+    <!-- ══ LIBRARY VIEW ══ -->
+    <div id="view-library" class="view">
+      <div id="library-inner">
+        <div id="library-header">
+          <h2>Knowledge Library</h2>
+          <div id="library-controls">
+            <input id="lib-search" class="inp inp-sm" placeholder="Search…" style="width:150px"/>
+            <select id="lib-domain" class="inp inp-sm" style="width:120px"></select>
+            <select id="lib-sort" class="inp inp-sm" style="width:110px">
+              <option value="newest">Newest</option>
+              <option value="domain">Domain</option>
+              <option value="confidence">Confidence</option>
+            </select>
+          </div>
+        </div>
+        <div id="domain-pills"></div>
+        <div id="thought-grid"></div>
+        <div id="lib-empty" style="display:none;text-align:center;padding:50px;color:var(--text-dim);font-size:12px"></div>
+      </div>
+    </div>
+
+    <!-- ══ SETTINGS VIEW ══ -->
+    <div id="view-settings" class="view">
+      <div id="settings-inner">
+        <h2>Settings</h2>
+        <p class="sub" style="font-size:11px;color:var(--text-dim);margin-bottom:24px">Your key is stored only in this browser. Never shared.</p>
+
+        <span class="section-label">Anthropic API Key</span>
+        <div style="display:flex;gap:8px">
+          <input id="settings-key" type="password" class="inp" placeholder="sk-ant-… or your key"/>
+          <button id="save-key" class="btn btn-primary">Save</button>
+        </div>
+        <p id="key-saved-msg" style="font-size:11px;color:var(--green);margin-top:6px;display:none">✓ Key saved. Brain is live.</p>
+
+        <span class="section-label" style="display:block;margin-top:24px">Brain Data</span>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button id="export-btn" class="btn btn-ghost">⬇ Export JSON</button>
+          <button id="import-btn" class="btn btn-ghost">⬆ Import JSON</button>
+          <button id="clear-btn" class="btn btn-danger">✕ Clear Brain</button>
+        </div>
+        <input id="import-file" type="file" accept=".json" style="display:none"/>
+
+        <span class="section-label" style="display:block;margin-top:24px">Statistics</span>
+        <div id="stats-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-top:8px"></div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<!-- MODAL -->
+<div id="modal-backdrop">
+  <div id="modal">
+    <div id="modal-header"></div>
+    <div id="modal-body"></div>
+    <div id="modal-footer"></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+// ═══════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════
+const STORAGE_KEY = 'mind_brain_v3';
+const KEY_STORE   = 'mind_api_key';
+const DOMAINS     = ['Geopolitics','Real Estate','Philosophy','Business','Vedic','Macro','Personal','Research','Other'];
+const DOMAIN_COLOR= {
+  'Geopolitics':'#e85d4a','Real Estate':'#f4a261','Philosophy':'#a8dadc',
+  'Business':'#f1c40f','Vedic':'#c77dff','Macro':'#48cae4',
+  'Personal':'#80ed99','Research':'#ff9f1c','Other':'#adb5bd'
+};
+const CONF_COLOR  = {conviction:'#c9a84c',belief:'#48cae4',hypothesis:'#5a5a7a'};
+const dColor = d => DOMAIN_COLOR[d] || DOMAIN_COLOR['Other'];
+
+// ═══════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════
+let state = {
+  brain: loadBrain(),
+  apiKey: localStorage.getItem(KEY_STORE) || '',
+  currentView: 'graph',
+  selectedId: null,
+  chatHistory: [],
+  listening: false,
+  voiceTarget: 'feed',   // 'feed' | 'chat'
+  searchGraph: '',
+  domainFilter: 'All',
+  libSearch: '',
+  libDomain: 'All',
+  libSort: 'newest',
+  processing: false,
+  sim: null,
+  rafId: null,
+};
+
+// ═══════════════════════════════════════════════════════════════
+// PERSISTENCE
+// ═══════════════════════════════════════════════════════════════
+function loadBrain(){
+  try{ return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {thoughts:[],edges:[]}; }
+  catch{ return {thoughts:[],edges:[]}; }
+}
+function saveBrain(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.brain)); }
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2); }
+
+// ═══════════════════════════════════════════════════════════════
+// API
+// ═══════════════════════════════════════════════════════════════
+async function callAI(messages, system){
+  if(!state.apiKey) throw new Error('No API key — go to ⚙ Settings and add your key.');
+  const r = await fetch('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      model:'claude-sonnet-4-6',
+      max_tokens:1000,
+      system,
+      messages
+    })
+  });
+  if(!r.ok){
+    const e = await r.json().catch(()=>({}));
+    throw new Error(e?.error?.message || 'API error '+r.status);
+  }
+  const d = await r.json();
+  return d.content?.[0]?.text || '';
+}
+
+async function processInput(content, existingThoughts){
+  const ctx = existingThoughts.slice(-20).map(t=>`[${t.domain}] ${t.summary}`).join('\n');
+  const system = `You are the analytical engine of a personal second brain. Return ONLY raw JSON — no markdown, no backticks, no explanation before or after.
+
+EXISTING KNOWLEDGE (last 20 entries):
+${ctx || 'Empty — this is the very first entry.'}
+
+Return exactly this JSON structure:
+{
+  "summary": "1-2 sentence core insight — sharp, precise, preserved",
+  "domain": "exactly one of: Geopolitics, Real Estate, Philosophy, Business, Vedic, Macro, Personal, Research, Other",
+  "tags": ["tag1","tag2","tag3"],
+  "confidence": "hypothesis or belief or conviction",
+  "keyInsight": "the single most important extractable idea",
+  "fullAnalysis": "3-4 sentence deep analysis preserving all nuance and original meaning",
+  "implication": "the second-order consequence — what this means beyond itself",
+  "question": "the most important unanswered question this raises",
+  "connections": ["summary fragments of existing thoughts this genuinely connects to"],
+  "contradiction": "description of existing belief this contradicts, or null"
+}`;
+  const msgContent = Array.isArray(content) ? content : [{type:'text',text:content}];
+  const raw = await callAI([{role:'user',content:msgContent}], system);
+  try{
+    return JSON.parse(raw.replace(/^```json|^```|```$/gm,'').trim());
+  }catch{
+    return {
+      summary: raw.slice(0,200), domain:'Other', tags:[], confidence:'hypothesis',
+      keyInsight: raw.slice(0,120), fullAnalysis: raw.slice(0,400),
+      implication:'', question:'', connections:[], contradiction:null
+    };
+  }
+}
+
+async function chatWithBrain(userMsg){
+  const kb = state.brain.thoughts.map((t,i)=>
+    `[${i+1}][${t.domain}][${t.confidence}] ${t.summary}\n  Insight: ${t.keyInsight}\n  Implies: ${t.implication||'—'}`
+  ).join('\n\n');
+  const system = `You are the living intelligence of this person's second brain — the accumulated weight of everything they have ever thought, read, and believed.
+
+KNOWLEDGE BASE (${state.brain.thoughts.length} thoughts):
+${kb || 'Empty. Tell the user to add thoughts first via the Feed tab.'}
+
+RULES:
+- Reference specific thoughts by [number] when relevant
+- Surface contradictions the user has not noticed
+- Give second-order implications beyond the literal question
+- Be intellectually rigorous — push back when warranted, never just agree
+- Speak as: "across your [N] thoughts..." or "your thinking on X suggests..."
+- Maximum 4 dense paragraphs. No filler. No pleasantries.`;
+  const messages = [
+    ...state.chatHistory.slice(-8).map(m=>({role:m.role,content:m.content})),
+    {role:'user',content:userMsg}
+  ];
+  return callAI(messages, system);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// THOUGHT OPERATIONS
+// ═══════════════════════════════════════════════════════════════
+async function addThought(content){
+  if(state.processing) return;
+  state.processing = true;
+  showProc(true,'Reading input…');
+  try{
+    const p = await processInput(content, state.brain.thoughts);
+    showProc(true,'Building connections…');
+    const t = {
+      id: uid(), timestamp: Date.now(),
+      summary: p.summary || 'Untitled thought',
+      domain: p.domain || 'Other',
+      tags: p.tags || [],
+      confidence: p.confidence || 'hypothesis',
+      keyInsight: p.keyInsight || '',
+      fullAnalysis: p.fullAnalysis || '',
+      implication: p.implication || '',
+      question: p.question || '',
+      contradiction: p.contradiction || null,
+      rawConnections: p.connections || [],
+      originalContent: typeof content === 'string' ? content : '[File / Image / PDF input]'
+    };
+    // Build edges
+    const newEdges = [];
+    (p.connections||[]).forEach(ct=>{
+      const m = state.brain.thoughts.find(x=>
+        x.summary && (
+          x.summary.toLowerCase().includes(ct.slice(0,30).toLowerCase()) ||
+          ct.toLowerCase().includes(x.summary.slice(0,30).toLowerCase())
+        )
+      );
+      if(m) newEdges.push({id:uid(),source:m.id,target:t.id,type:'connection'});
+    });
+    if(p.contradiction){
+      const m = state.brain.thoughts.find(x=>
+        x.summary && x.summary.toLowerCase().includes(p.contradiction.slice(0,30).toLowerCase())
+      );
+      if(m) newEdges.push({id:uid(),source:m.id,target:t.id,type:'contradiction'});
+    }
+    state.brain.thoughts.push(t);
+    state.brain.edges.push(...newEdges);
+    saveBrain();
+    state.selectedId = t.id;
+    // Clear inputs
+    $('inp-text').value='';
+    $('inp-url').value='';
+    toast('Thought stored + connected');
+    setView('graph');
+    renderAll();
+    openModal(t);
+  }catch(e){
+    showError(e.message);
+  }finally{
+    showProc(false);
+    state.processing=false;
+  }
+}
+
+function deleteThought(id){
+  state.brain.thoughts = state.brain.thoughts.filter(t=>t.id!==id);
+  state.brain.edges = state.brain.edges.filter(e=>e.source!==id && e.target!==id);
+  if(state.selectedId===id) state.selectedId=null;
+  saveBrain();
+  closeModal();
+  renderAll();
+  toast('Thought removed');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GRAPH
+// ═══════════════════════════════════════════════════════════════
+function renderGraph(){
+  const svg = d3.select('#graph-svg');
+  svg.selectAll('*').remove();
+  if(state.sim){ state.sim.stop(); state.sim=null; }
+  if(state.rafId){ cancelAnimationFrame(state.rafId); state.rafId=null; }
+
+  const el = document.getElementById('graph-area');
+  const W = el.clientWidth || 800;
+  const H = el.clientHeight || 600;
+  svg.attr('width',W).attr('height',H);
+
+  // Filter thoughts
+  const thoughts = state.brain.thoughts.filter(t=>{
+    const md = state.domainFilter==='All' || t.domain===state.domainFilter;
+    const ms = !state.searchGraph || (t.summary||'').toLowerCase().includes(state.searchGraph.toLowerCase()) ||
+               (t.tags||[]).some(g=>g.toLowerCase().includes(state.searchGraph.toLowerCase()));
+    return md && ms;
+  });
+
+  // Empty state
+  if(thoughts.length===0){
+    const g = svg.append('g');
+    const cx=W/2, cy=H/2;
+    // Concentric rings
+    [60,40,22].forEach((r,i)=>{
+      g.append('circle').attr('cx',cx).attr('cy',cy).attr('r',r)
+       .attr('fill','none').attr('stroke','#1a1a35').attr('stroke-width',.8).attr('opacity',.6-i*.15);
+    });
+    g.append('circle').attr('cx',cx).attr('cy',cy).attr('r',5)
+     .attr('fill','#c9a84c').attr('opacity',.4)
+     .attr('filter','url(#glow-gold)');
+    g.append('text').attr('x',cx).attr('y',cy+85).attr('text-anchor','middle')
+     .attr('fill','#5a5a7a').attr('font-size',12).attr('font-family','Inter,sans-serif')
+     .text('Add your first thought →');
+    return;
+  }
+
+  // Defs
+  const defs = svg.append('defs');
+  // Glow filters
+  Object.entries(DOMAIN_COLOR).forEach(([name,col])=>{
+    const k = name.replace(/\s/g,'');
+    const f = defs.append('filter').attr('id','glow-'+k)
+               .attr('x','-60%').attr('y','-60%').attr('width','220%').attr('height','220%');
+    f.append('feGaussianBlur').attr('stdDeviation','3.5').attr('result','blur');
+    const fm = f.append('feMerge');
+    fm.append('feMergeNode').attr('in','blur');
+    fm.append('feMergeNode').attr('in','SourceGraphic');
+  });
+  // Selected glow
+  const sf = defs.append('filter').attr('id','glow-sel')
+             .attr('x','-80%').attr('y','-80%').attr('width','260%').attr('height','260%');
+  sf.append('feGaussianBlur').attr('stdDeviation','8').attr('result','blur');
+  const sfm = sf.append('feMerge');
+  sfm.append('feMergeNode').attr('in','blur'); sfm.append('feMergeNode').attr('in','SourceGraphic');
+  // Gold glow
+  const gf = defs.append('filter').attr('id','glow-gold')
+             .attr('x','-60%').attr('y','-60%').attr('width','220%').attr('height','220%');
+  gf.append('feGaussianBlur').attr('stdDeviation','4').attr('result','blur');
+  const gfm = gf.append('feMerge');
+  gfm.append('feMergeNode').attr('in','blur'); gfm.append('feMergeNode').attr('in','SourceGraphic');
+
+  const visIds = new Set(thoughts.map(t=>t.id));
+  const nodes = thoughts.map(t=>({
+    ...t,
+    _r: t.confidence==='conviction'?15:t.confidence==='belief'?10:6,
+    _col: dColor(t.domain),
+    _glow: 'glow-'+(t.domain||'Other').replace(/\s/g,'')
+  }));
+  const nodeMap = Object.fromEntries(nodes.map(n=>[n.id,n]));
+  const links = state.brain.edges
+    .filter(e=>visIds.has(e.source)&&visIds.has(e.target))
+    .map(e=>({...e}));
+
+  // Simulation
+  const sim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d=>d.id).distance(d=>d.type==='contradiction'?80:130).strength(.35))
+    .force('charge', d3.forceManyBody().strength(-250))
+    .force('center', d3.forceCenter(W/2, H/2))
+    .force('collide', d3.forceCollide().radius(d=>d._r+20));
+  state.sim = sim;
+
+  const root = svg.append('g');
+  svg.call(
+    d3.zoom().scaleExtent([.2,4])
+    .on('zoom', e=>root.attr('transform',e.transform))
+  );
+
+  // Links
+  const linkG = root.append('g');
+  const linkSel = linkG.selectAll('line').data(links).enter().append('line')
+    .attr('stroke', d=>d.type==='contradiction'?'#e85d4a':'#2a2a50')
+    .attr('stroke-width', d=>d.type==='contradiction'?1.5:1)
+    .attr('stroke-dasharray', d=>d.type==='contradiction'?'5 4':'none')
+    .attr('opacity', .6);
+
+  // Particle layer
+  const partG = root.append('g');
+
+  // Nodes
+  const nodeG = root.append('g');
+  const nodeSel = nodeG.selectAll('g.nd').data(nodes).enter().append('g').attr('class','nd')
+    .style('cursor','pointer')
+    .on('click',(e,d)=>{ e.stopPropagation(); state.selectedId=d.id; renderSidebar(); openModal(d); })
+    .call(
+      d3.drag()
+      .on('start',(e,d)=>{ if(!e.active) sim.alphaTarget(.3).restart(); d.fx=d.x; d.fy=d.y; })
+      .on('drag',(e,d)=>{ d.fx=e.x; d.fy=e.y; })
+      .on('end',(e,d)=>{ if(!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; })
+    );
+
+  // Orbit ring
+  nodeSel.append('circle')
+    .attr('r',d=>d._r+8).attr('fill','none')
+    .attr('stroke',d=>d._col).attr('stroke-width',.5).attr('opacity',.2);
+
+  // Body
+  nodeSel.append('circle')
+    .attr('r',d=>d._r)
+    .attr('fill',d=>d.id===state.selectedId ? d._col+'55' : d._col+'22')
+    .attr('stroke',d=>d._col)
+    .attr('stroke-width',d=>d.id===state.selectedId?2.5:1.5)
+    .attr('filter',d=>d.id===state.selectedId?'url(#glow-sel)':'url(#'+d._glow+')');
+
+  // Core
+  nodeSel.append('circle').attr('r',2).attr('fill',d=>d._col).attr('opacity',.9);
+
+  // Label
+  nodeSel.append('text')
+    .text(d=>{ const s=d.summary||''; return s.length>36?s.slice(0,35)+'…':s; })
+    .attr('dy',d=>d._r+13).attr('text-anchor','middle')
+    .attr('font-size','9px').attr('font-family','Inter,sans-serif')
+    .attr('fill','#5a5a7a').attr('pointer-events','none');
+
+  // Tooltip
+  nodeSel.append('title').text(d=>d.summary||'');
+
+  // Tick
+  sim.on('tick',()=>{
+    linkSel.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
+           .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+    nodeSel.attr('transform',d=>`translate(${d.x},${d.y})`);
+  });
+
+  // Synaptic particles
+  const particles = [];
+  function frame(){
+    if(links.length>0 && Math.random()<.05){
+      const l = links[Math.floor(Math.random()*links.length)];
+      particles.push({l, t:0, spd:.006+Math.random()*.012, col:l.type==='contradiction'?'#e85d4a':'#c9a84c'});
+    }
+    for(let i=particles.length-1;i>=0;i--){
+      particles[i].t += particles[i].spd;
+      if(particles[i].t>=1) particles.splice(i,1);
+    }
+    partG.selectAll('circle.pt').remove();
+    particles.forEach(p=>{
+      const s=p.l.source, t=p.l.target;
+      if(!s.x||!t.x) return;
+      const x=s.x+(t.x-s.x)*p.t, y=s.y+(t.y-s.y)*p.t;
+      const op = p.t<.5 ? p.t*2 : (1-p.t)*2;
+      partG.append('circle').attr('class','pt')
+        .attr('cx',x).attr('cy',y).attr('r',2.5)
+        .attr('fill',p.col).attr('opacity',op);
+    });
+    state.rafId = requestAnimationFrame(frame);
+  }
+  frame();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SIDEBAR
+// ═══════════════════════════════════════════════════════════════
+function renderSidebar(){
+  const sc = $('sidebar-content');
+  const t = state.brain.thoughts.find(x=>x.id===state.selectedId);
+  if(!t){ sc.innerHTML=`<div id="sidebar-empty"><div class="dot"><div style="width:7px;height:7px;border-radius:50%;background:var(--gold);opacity:.4"></div></div><p>Select a node<br/>to inspect</p></div>`; return; }
+  const col = dColor(t.domain);
+  const conns = state.brain.edges.filter(e=>e.source===t.id||e.target===t.id);
+  sc.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+      <span class="tag" style="background:${col}22;color:${col};border:1px solid ${col}33">${t.domain}</span>
+      <button class="btn btn-primary" style="padding:5px 10px;font-size:11px" onclick="openModal(state.brain.thoughts.find(x=>x.id==='${t.id}'))">⬡ Full View</button>
+    </div>
+    <p style="font-size:13px;font-weight:600;line-height:1.5;color:var(--text);margin-bottom:10px">${esc(t.summary)}</p>
+    <span class="section-label">Key Insight</span>
+    <p style="font-size:12px;color:var(--blue);line-height:1.5;margin-bottom:8px">${esc(t.keyInsight)}</p>
+    ${t.implication?`<span class="section-label">Implies</span><p style="font-size:11px;color:var(--text-mid);line-height:1.5;margin-bottom:8px">${esc(t.implication)}</p>`:''}
+    ${t.question?`<span class="section-label">Open Question</span><p style="font-size:11px;color:var(--purple);line-height:1.5;font-style:italic;margin-bottom:8px">"${esc(t.question)}"</p>`:''}
+    <span class="section-label">Connections (${conns.length})</span>
+    ${conns.length===0?`<p style="font-size:11px;color:var(--text-dim)">None yet.</p>`
+      : conns.map(e=>{
+          const oid=e.source===t.id?e.target:e.source;
+          const ot=state.brain.thoughts.find(x=>x.id===oid); if(!ot) return '';
+          const ec=dColor(ot.domain);
+          return `<div class="conn-card" onclick="state.selectedId='${ot.id}';renderSidebar();openModal(state.brain.thoughts.find(x=>x.id==='${ot.id}'))">
+            <div style="flex-shrink:0;margin-top:3px"><div style="width:9px;height:9px;border-radius:50%;background:${ec};box-shadow:0 0 5px ${ec}"></div></div>
+            <div style="flex:1;min-width:0">
+              <span style="font-size:9px;color:${e.type==='contradiction'?'var(--red)':'var(--gold)'};font-weight:700">${e.type==='contradiction'?'⚡ contradicts':'⟷ connects'}</span>
+              <p style="font-size:11px;color:var(--text-dim);margin:3px 0 0;line-height:1.4">${esc((ot.summary||'').slice(0,75))}…</p>
+            </div>
+          </div>`;
+        }).join('')
+    }
+    <button class="btn btn-danger" style="margin-top:14px;font-size:11px" onclick="if(confirm('Remove this thought?')) deleteThought('${t.id}')">Remove thought</button>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MODAL — Full Thought Explorer
+// ═══════════════════════════════════════════════════════════════
+function openModal(t){
+  if(!t) return;
+  state.selectedId = t.id;
+  const col = dColor(t.domain);
+  const confCol = CONF_COLOR[t.confidence] || '#5a5a7a';
+  const connEdges = state.brain.edges.filter(e=>e.source===t.id||e.target===t.id);
+  const connected = connEdges.map(e=>{
+    const oid=e.source===t.id?e.target:e.source;
+    const ot=state.brain.thoughts.find(x=>x.id===oid);
+    return ot ? {thought:ot,type:e.type} : null;
+  }).filter(Boolean);
+
+  // Header
+  $('modal-header').innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:11px">
+      <div style="display:flex;gap:7px;flex-wrap:wrap">
+        <span class="tag" style="background:${col}22;color:${col};border:1px solid ${col}33">${t.domain}</span>
+        <span class="pill" style="background:${confCol}18;color:${confCol};border:1px solid ${confCol}30">
+          ${t.confidence==='conviction'?'⬡':t.confidence==='belief'?'◈':'◇'} ${t.confidence}
+        </span>
+        <span class="pill" style="background:transparent;color:var(--text-dim);border:1px solid var(--border)">
+          ${new Date(t.timestamp).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})}
+        </span>
+        ${connected.length>0?`<span class="pill" style="background:transparent;color:${col};border:1px solid ${col}33">⟷ ${connected.length} connection${connected.length!==1?'s':''}</span>`:''}
+      </div>
+      <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px" onclick="closeModal()">✕ Close</button>
+    </div>
+    <h2 style="font-family:var(--font-display);font-size:17px;font-weight:600;color:var(--text);line-height:1.5">${esc(t.summary)}</h2>
+  `;
+
+  // Body
+  let body = '';
+
+  // Key Insight
+  body += `<div class="insight-block" style="background:${col}0d;border:1px solid ${col}22">
+    <div style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:${col};font-weight:700;margin-bottom:7px">⬡ Core Insight</div>
+    <p style="font-size:14px;color:var(--text);line-height:1.65;font-weight:500;margin:0">${esc(t.keyInsight||'—')}</p>
+  </div>`;
+
+  // Full Analysis
+  if(t.fullAnalysis){
+    body += `<span class="section-label">Full Analysis</span>
+    <div class="block-quote">${esc(t.fullAnalysis)}</div>`;
+  }
+
+  // Implication
+  if(t.implication){
+    body += `<span class="section-label">Second-Order Implication</span>
+    <div class="insight-block" style="background:rgba(72,202,228,.07);border:1px solid rgba(72,202,228,.18)">
+      <p style="font-size:13px;color:var(--blue);line-height:1.65;margin:0">${esc(t.implication)}</p>
+    </div>`;
+  }
+
+  // Question
+  if(t.question){
+    body += `<span class="section-label">Open Question</span>
+    <div class="insight-block" style="background:rgba(199,125,255,.07);border:1px solid rgba(199,125,255,.18)">
+      <p style="font-size:13px;color:var(--purple);line-height:1.65;margin:0;font-style:italic">"${esc(t.question)}"</p>
+    </div>`;
+  }
+
+  // Contradiction
+  if(t.contradiction){
+    body += `<span class="section-label">⚡ Contradicts</span>
+    <div class="insight-block" style="background:rgba(232,93,74,.07);border:1px solid rgba(232,93,74,.2)">
+      <p style="font-size:13px;color:var(--red);line-height:1.65;margin:0">${esc(t.contradiction)}</p>
+    </div>`;
+  }
+
+  // Tags
+  if(t.tags&&t.tags.length>0){
+    body += `<span class="section-label">Tags</span>
+    <div style="margin-bottom:4px">${t.tags.map(g=>`<span class="tag" style="background:rgba(152,152,184,.12);color:var(--text-mid);border:1px solid rgba(152,152,184,.2)">${esc(g)}</span>`).join('')}</div>`;
+  }
+
+  // Connected thoughts
+  if(connected.length>0){
+    body += `<span class="section-label">Connected Thoughts (${connected.length})</span>`;
+    connected.forEach(({thought:ct,type})=>{
+      const cc=dColor(ct.domain);
+      body += `<div class="conn-card" onclick="openModal(state.brain.thoughts.find(x=>x.id==='${ct.id}'))" style="border-color:${type==='contradiction'?'rgba(232,93,74,.3)':cc+'33'}">
+        <div style="flex-shrink:0;margin-top:3px"><div style="width:10px;height:10px;border-radius:50%;background:${cc};box-shadow:0 0 7px ${cc}"></div></div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;gap:7px;margin-bottom:5px;flex-wrap:wrap">
+            <span class="tag" style="background:${cc}22;color:${cc};border:1px solid ${cc}33">${ct.domain}</span>
+            <span style="font-size:9px;color:${type==='contradiction'?'var(--red)':'var(--gold)'};font-weight:700">${type==='contradiction'?'⚡ contradicts':'⟷ connects'}</span>
+          </div>
+          <p style="font-size:12px;color:var(--text-mid);margin:0;line-height:1.5">${esc(ct.summary||'')}</p>
+          ${ct.keyInsight?`<p style="font-size:11px;color:var(--text-dim);margin:4px 0 0;font-style:italic">→ ${esc(ct.keyInsight.slice(0,110))}${ct.keyInsight.length>110?'…':''}</p>`:''}
+        </div>
+        <span style="color:var(--text-dim);font-size:14px;flex-shrink:0">›</span>
+      </div>`;
+    });
+  }
+
+  // Original Source
+  if(t.originalContent){
+    const src = t.originalContent;
+    body += `<span class="section-label">Original Source — Preserved</span>
+    <div class="source-box">
+      <div class="source-header">
+        <span style="font-size:10px;color:var(--text-dim);letter-spacing:.08em;text-transform:uppercase">Raw Input</span>
+        <button class="btn btn-ghost" style="padding:3px 8px;font-size:10px" onclick="navigator.clipboard.writeText(decodeURIComponent('${encodeURIComponent(src)}'));toast('Copied')">⧉ Copy</button>
+      </div>
+      <div class="source-pre">${esc(src.slice(0,2500))}${src.length>2500?'\n\n[… truncated for display]':''}</div>
+    </div>`;
+  }
+
+  $('modal-body').innerHTML = body;
+
+  // Footer
+  $('modal-footer').innerHTML=`
+    <button class="btn btn-danger" onclick="if(confirm('Remove this thought from your brain?')) deleteThought('${t.id}')">✕ Remove</button>
+    <div style="display:flex;gap:8px;align-items:center">
+      ${connected.length>0?`<span style="font-size:10px;color:var(--text-dim)">Navigate connections ↑</span>`:''}
+    </div>
+  `;
+
+  $('modal-backdrop').classList.add('show');
+}
+
+function closeModal(){
+  $('modal-backdrop').classList.remove('show');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LIBRARY
+// ═══════════════════════════════════════════════════════════════
+function renderLibrary(){
+  // Domain pills
+  const domainCounts = {};
+  state.brain.thoughts.forEach(t=>{ domainCounts[t.domain]=(domainCounts[t.domain]||0)+1; });
+  const pillContainer = $('domain-pills');
+  pillContainer.innerHTML = Object.entries(domainCounts).map(([d,n])=>{
+    const col=dColor(d);
+    const active=state.libDomain===d;
+    return `<button class="dpill" style="background:${col}${active?'33':'18'};color:${col};border-color:${col}${active?'66':'33'}"
+      onclick="state.libDomain=state.libDomain==='${d}'?'All':'${d}';renderLibrary()">${d} <span style="opacity:.6">${n}</span></button>`;
+  }).join('');
+
+  // Update select
+  const sel=$('lib-domain');
+  const curDomain=state.libDomain;
+  sel.innerHTML=`<option value="All">All domains</option>`+DOMAINS.map(d=>`<option value="${d}" ${d===curDomain?'selected':''}>${d}</option>`).join('');
+
+  // Filter + sort
+  const thoughts = state.brain.thoughts.filter(t=>{
+    const md=state.libDomain==='All'||t.domain===state.libDomain;
+    const ms=!state.libSearch||(t.summary||'').toLowerCase().includes(state.libSearch.toLowerCase())||
+              (t.tags||[]).some(g=>g.toLowerCase().includes(state.libSearch.toLowerCase()))||
+              (t.keyInsight||'').toLowerCase().includes(state.libSearch.toLowerCase());
+    return md&&ms;
+  }).sort((a,b)=>{
+    if(state.libSort==='domain') return (a.domain||'').localeCompare(b.domain||'');
+    if(state.libSort==='confidence'){ const o={conviction:0,belief:1,hypothesis:2}; return (o[a.confidence]||2)-(o[b.confidence]||2); }
+    return b.timestamp-a.timestamp;
+  });
+
+  const grid=$('thought-grid');
+  const empty=$('lib-empty');
+  if(thoughts.length===0){
+    grid.innerHTML='';
+    empty.style.display='block';
+    empty.textContent=state.brain.thoughts.length===0?'No thoughts yet. Go to ＋ Feed →':'No thoughts match this filter.';
+    return;
+  }
+  empty.style.display='none';
+  grid.innerHTML=thoughts.map(t=>{
+    const col=dColor(t.domain);
+    const connCount=state.brain.edges.filter(e=>e.source===t.id||e.target===t.id).length;
+    return `<div class="t-card${state.selectedId===t.id?' selected':''}" onclick="state.selectedId='${t.id}';openModal(state.brain.thoughts.find(x=>x.id==='${t.id}'));renderLibrary()">
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+        <span class="tag" style="background:${col}22;color:${col};border:1px solid ${col}33">${t.domain}</span>
+        <span style="font-size:9px;color:var(--text-dim)">${new Date(t.timestamp).toLocaleDateString('en-IN',{day:'numeric',month:'short'})}</span>
+      </div>
+      <p style="font-size:12px;font-weight:600;color:var(--text);line-height:1.5;margin:0 0 6px">${esc(t.summary||'')}</p>
+      <p style="font-size:11px;color:var(--text-mid);line-height:1.4;margin:0 0 8px">${esc((t.keyInsight||'').slice(0,100))}${(t.keyInsight||'').length>100?'…':''}</p>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>${(t.tags||[]).slice(0,3).map(g=>`<span class="tag" style="background:rgba(152,152,184,.1);color:var(--text-dim);border:none">${esc(g)}</span>`).join('')}</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          ${connCount>0?`<span style="font-size:9px;color:var(--gold)">⟷ ${connCount}</span>`:''}
+          <span style="font-size:10px;color:${CONF_COLOR[t.confidence]||'var(--text-dim)'};font-weight:600">${t.confidence}</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CHAT
+// ═══════════════════════════════════════════════════════════════
+async function sendChat(msg){
+  if(!msg.trim()||state.processing) return;
+  $('chat-input').value='';
+  $('chat-empty').style.display='none';
+  appendBubble('user',msg);
+  const typing = appendBubble('ai','Thinking across your knowledge…',true);
+  state.processing=true;
+  try{
+    const reply = await chatWithBrain(msg);
+    typing.remove();
+    appendBubble('ai',reply);
+    state.chatHistory.push({role:'user',content:msg},{role:'assistant',content:reply});
+    if(state.chatHistory.length>20) state.chatHistory=state.chatHistory.slice(-20);
+  }catch(e){
+    typing.remove();
+    appendBubble('ai','Error: '+e.message);
+    showError(e.message);
+  }finally{ state.processing=false; }
+}
+
+function appendBubble(role,text,typing=false){
+  const cm=$('chat-messages');
+  const d=document.createElement('div');
+  d.style.display='flex';
+  d.style.justifyContent=role==='user'?'flex-end':'flex-start';
+  const b=document.createElement('div');
+  b.className='bubble '+role+(typing?' typing':'');
+  b.textContent=text;
+  d.appendChild(b);
+  cm.appendChild(d);
+  cm.scrollTop=cm.scrollHeight;
+  return d;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SETTINGS + STATS
+// ═══════════════════════════════════════════════════════════════
+function renderStats(){
+  const t=state.brain.thoughts;
+  const confCounts={conviction:0,belief:0,hypothesis:0};
+  const domCounts={};
+  t.forEach(x=>{ confCounts[x.confidence]=(confCounts[x.confidence]||0)+1; domCounts[x.domain]=(domCounts[x.domain]||0)+1; });
+  const topDomain=Object.entries(domCounts).sort((a,b)=>b[1]-a[1])[0];
+  $('stats-grid').innerHTML=`
+    <div class="stat-pill"><span class="num" style="color:var(--gold)">${t.length}</span><span class="lbl">Thoughts</span></div>
+    <div class="stat-pill"><span class="num" style="color:var(--blue)">${state.brain.edges.length}</span><span class="lbl">Connections</span></div>
+    <div class="stat-pill"><span class="num" style="color:var(--gold)">${confCounts.conviction}</span><span class="lbl">Convictions</span></div>
+    <div class="stat-pill"><span class="num" style="color:var(--blue)">${confCounts.belief}</span><span class="lbl">Beliefs</span></div>
+    <div class="stat-pill"><span class="num" style="color:var(--text-dim)">${confCounts.hypothesis}</span><span class="lbl">Hypotheses</span></div>
+    ${topDomain?`<div class="stat-pill"><span class="num" style="color:${dColor(topDomain[0])};font-size:12px">${topDomain[0]}</span><span class="lbl">Top Domain</span></div>`:''}
+  `;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GRAPH STATS OVERLAY
+// ═══════════════════════════════════════════════════════════════
+function renderGraphOverlay(){
+  const confCounts={};
+  state.brain.thoughts.forEach(t=>{ confCounts[t.confidence]=(confCounts[t.confidence]||0)+1; });
+  const bl=$('graph-overlay-bl');
+  bl.innerHTML=Object.entries(confCounts).map(([k,v])=>`
+    <div class="stat-pill">
+      <span class="num" style="color:${CONF_COLOR[k]||'var(--text-dim)'}">${v}</span>
+      <span class="lbl">${k}</span>
+    </div>`).join('');
+  // Hint visibility
+  $('graph-hint').style.display=state.brain.thoughts.length>0?'block':'none';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// HEADER STATS
+// ═══════════════════════════════════════════════════════════════
+function renderHeaderStats(){
+  $('brain-stats').textContent=`${state.brain.thoughts.length} thought${state.brain.thoughts.length!==1?'s':''}  ·  ${state.brain.edges.length} link${state.brain.edges.length!==1?'s':''}`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MASTER RENDER
+// ═══════════════════════════════════════════════════════════════
+function renderAll(){
+  renderHeaderStats();
+  renderGraphOverlay();
+  if(state.currentView==='graph'){ renderGraph(); renderSidebar(); }
+  if(state.currentView==='library') renderLibrary();
+  if(state.currentView==='settings') renderStats();
+  populateDomainFilters();
+}
+
+function populateDomainFilters(){
+  const opts=`<option value="All">All domains</option>`+DOMAINS.map(d=>`<option value="${d}">${d}</option>`).join('');
+  $('graph-domain-filter').innerHTML=opts;
+  $('graph-domain-filter').value=state.domainFilter;
+  $('lib-domain').innerHTML=opts;
+  $('lib-domain').value=state.libDomain;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// VIEW ROUTER
+// ═══════════════════════════════════════════════════════════════
+function setView(name){
+  state.currentView=name;
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  const v=$('view-'+name);
+  if(v) v.classList.add('active');
+  const btn=document.querySelector(`.nav-btn[data-view="${name}"]`);
+  if(btn) btn.classList.add('active');
+  if(state.sim){ state.sim.stop(); state.sim=null; }
+  if(state.rafId){ cancelAnimationFrame(state.rafId); state.rafId=null; }
+  if(name==='graph'){ renderGraph(); renderSidebar(); renderGraphOverlay(); }
+  if(name==='library') renderLibrary();
+  if(name==='settings') renderStats();
+  if(name==='chat' && state.brain.thoughts.length===0) $('chat-empty').style.display='block';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// VOICE
+// ═══════════════════════════════════════════════════════════════
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+let rec=null;
+if(SR){
+  rec=new SR();
+  rec.continuous=false; rec.interimResults=false; rec.lang='en-IN';
+  rec.onresult=e=>{
+    const t=e.results[0][0].transcript;
+    if(state.voiceTarget==='chat') $('chat-input').value+=(' '+t).trimStart();
+    else $('inp-text').value+=(' '+t).trimStart();
+    setListening(false);
+  };
+  rec.onerror=()=>setListening(false);
+  rec.onend=()=>setListening(false);
+}
+function toggleVoice(target){
+  if(!rec){ showError('Voice input needs Chrome or Safari.'); return; }
+  if(state.listening){ rec.stop(); setListening(false); return; }
+  state.voiceTarget=target;
+  rec.start(); setListening(true);
+}
+function setListening(v){
+  state.listening=v;
+  const fi=$('voice-indicator');
+  if(fi) fi.style.display=v?'block':'none';
+  [$('voice-text-btn'),$('voice-chat-btn')].forEach(btn=>{
+    if(!btn) return;
+    if(v&&((btn.id==='voice-text-btn'&&state.voiceTarget==='feed')||(btn.id==='voice-chat-btn'&&state.voiceTarget==='chat'))){
+      btn.textContent='⏹'; btn.classList.add('active');
+    }else{
+      btn.textContent='🎙'; btn.classList.remove('active');
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FILE HANDLING
+// ═══════════════════════════════════════════════════════════════
+async function handleFile(file){
+  if(!file) return;
+  showProc(true,'Reading file…');
+  try{
+    if(file.type==='application/pdf'){
+      const b64=await fileToB64(file);
+      await addThought([
+        {type:'document',source:{type:'base64',media_type:'application/pdf',data:b64}},
+        {type:'text',text:`Analyse this PDF thoroughly: "${file.name}". Extract all key insights, arguments, data points, and preserve important details.`}
+      ]);
+    }else if(file.type.startsWith('image/')){
+      const b64=await fileToB64(file);
+      await addThought([
+        {type:'image',source:{type:'base64',media_type:file.type,data:b64}},
+        {type:'text',text:'Analyse everything in this image — all visible text, data, charts, concepts, numbers. Preserve every detail precisely.'}
+      ]);
+    }else{
+      const text=await file.text();
+      await addThought(`FILE: ${file.name}\n\n${text.slice(0,6000)}`);
+    }
+  }catch(e){ showError(e.message); showProc(false); state.processing=false; }
+}
+function fileToB64(f){
+  return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(f); });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// UI HELPERS
+// ═══════════════════════════════════════════════════════════════
+function $(id){ return document.getElementById(id); }
+function esc(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+function showError(msg){ $('error-text').textContent=msg; $('error-bar').classList.add('show'); }
+function hideError(){ $('error-bar').classList.remove('show'); }
+function toast(msg){
+  const t=$('toast'); t.textContent=msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2200);
+}
+function showProc(v,status=''){
+  const po=$('proc-overlay'), ff=$('feed-form');
+  if(!po||!ff) return;
+  po.style.display=v?'flex':'none';
+  ff.style.display=v?'none':'block';
+  if(status) $('proc-status').textContent=status;
+}
+
+// Export / Import / Clear
+function exportBrain(){
+  const data=JSON.stringify(state.brain,null,2);
+  const a=document.createElement('a');
+  a.href='data:application/json,'+encodeURIComponent(data);
+  a.download='mind-brain-'+Date.now()+'.json';
+  a.click();
+  toast('Brain exported');
+}
+function importBrain(file){
+  const r=new FileReader();
+  r.onload=e=>{
+    try{
+      const d=JSON.parse(e.target.result);
+      if(d.thoughts&&d.edges){ state.brain=d; saveBrain(); renderAll(); toast('Brain imported — '+d.thoughts.length+' thoughts'); }
+      else showError('Invalid brain file.');
+    }catch{ showError('Could not read file.'); }
+  };
+  r.readAsText(file);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// EVENT LISTENERS
+// ═══════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded',()=>{
+
+  // Nav
+  document.querySelectorAll('.nav-btn').forEach(btn=>{
+    btn.addEventListener('click',()=>setView(btn.dataset.view));
+  });
+
+  // Key save
+  $('save-key').addEventListener('click',()=>{
+    const k=$('settings-key').value.trim();
+    if(!k){ showError('Enter a valid API key.'); return; }
+    state.apiKey=k;
+    localStorage.setItem(KEY_STORE,k);
+    $('key-status').style.display='inline';
+    $('key-saved-msg').style.display='block';
+    toast('API key saved');
+  });
+
+  // Pre-fill key field if saved
+  if(state.apiKey){
+    $('settings-key').value=state.apiKey;
+    $('key-status').style.display='inline';
+  }
+
+  // Error close
+  $('error-close').addEventListener('click',hideError);
+
+  // Feed — text submit
+  $('submit-text').addEventListener('click',()=>{
+    const v=$('inp-text').value.trim();
+    if(!v){ showError('Type or speak a thought first.'); return; }
+    addThought(v);
+  });
+  $('inp-text').addEventListener('keydown',e=>{ if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)) addThought($('inp-text').value.trim()); });
+
+  // Feed — URL submit
+  $('submit-url').addEventListener('click',async()=>{
+    const url=$('inp-url').value.trim();
+    if(!url){ showError('Enter a URL.'); return; }
+    showProc(true,'Fetching URL…');
+    try{
+      const r=await fetch('https://api.allorigins.win/get?url='+encodeURIComponent(url));
+      const d=await r.json();
+      const text=(d.contents||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,6000);
+      await addThought('SOURCE: '+url+'\n\n'+text);
+    }catch(e){ showError('Could not fetch URL. Paste the text manually.'); showProc(false); }
+  });
+  $('inp-url').addEventListener('keydown',e=>{ if(e.key==='Enter') $('submit-url').click(); });
+
+  // Feed — file
+  $('drop-zone').addEventListener('click',()=>$('file-input').click());
+  $('file-input').addEventListener('change',e=>{ if(e.target.files[0]) handleFile(e.target.files[0]); e.target.value=''; });
+  $('drop-zone').addEventListener('dragover',e=>{ e.preventDefault(); $('drop-zone').classList.add('drag'); });
+  $('drop-zone').addEventListener('dragleave',()=>$('drop-zone').classList.remove('drag'));
+  $('drop-zone').addEventListener('drop',e=>{ e.preventDefault(); $('drop-zone').classList.remove('drag'); if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+
+  // Voice — feed
+  $('voice-text-btn').addEventListener('click',()=>toggleVoice('feed'));
+
+  // Chat
+  $('chat-send').addEventListener('click',()=>sendChat($('chat-input').value));
+  $('chat-input').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); sendChat($('chat-input').value); }});
+  $('voice-chat-btn').addEventListener('click',()=>toggleVoice('chat'));
+  document.querySelectorAll('.chat-suggestion').forEach(btn=>{
+    btn.addEventListener('click',()=>{ $('chat-input').value=btn.dataset.q; $('chat-send').click(); });
+  });
+
+  // Graph filters
+  $('graph-search').addEventListener('input',e=>{ state.searchGraph=e.target.value; renderGraph(); });
+  $('graph-domain-filter').addEventListener('change',e=>{ state.domainFilter=e.target.value; renderGraph(); });
+
+  // Library filters
+  $('lib-search').addEventListener('input',e=>{ state.libSearch=e.target.value; renderLibrary(); });
+  $('lib-domain').addEventListener('change',e=>{ state.libDomain=e.target.value; renderLibrary(); });
+  $('lib-sort').addEventListener('change',e=>{ state.libSort=e.target.value; renderLibrary(); });
+
+  // Settings
+  $('export-btn').addEventListener('click',exportBrain);
+  $('import-btn').addEventListener('click',()=>$('import-file').click());
+  $('import-file').addEventListener('change',e=>{ if(e.target.files[0]) importBrain(e.target.files[0]); e.target.value=''; });
+  $('clear-btn').addEventListener('click',()=>{
+    if(confirm('Clear your entire brain? This cannot be undone.')){ state.brain={thoughts:[],edges:[]}; saveBrain(); state.selectedId=null; renderAll(); toast('Brain cleared'); }
+  });
+
+  // Modal — close on backdrop
+  $('modal-backdrop').addEventListener('click',e=>{ if(e.target===$('modal-backdrop')) closeModal(); });
+
+  // Modal — keyboard
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeModal(); });
+
+  // Resize graph
+  window.addEventListener('resize',()=>{ if(state.currentView==='graph') renderGraph(); });
+
+  // Initial render
+  populateDomainFilters();
+  renderAll();
+});
+</script>
+</body>
+</html>
