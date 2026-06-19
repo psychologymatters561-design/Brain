@@ -395,9 +395,9 @@ select.inp{appearance:none;cursor:pointer}
 
           <span class="section-label" style="display:block;margin-top:20px">PDF / Image / Text File</span>
           <div id="drop-zone" class="drop-zone">
-            <p style="color:var(--text-dim);font-size:12px;margin:0">📎 Drop PDF, image, or text file<br/><span style="font-size:10px">or tap to browse</span></p>
+            <p style="color:var(--text-dim);font-size:12px;margin:0">📎 Drop PDF, image, video, or text file<br/><span style="font-size:10px;color:var(--text-dim)">PDF · Image · Video (≤20MB) · TXT · MD · CSV · JSON</span><br/><span style="font-size:10px">or tap to browse</span></p>
           </div>
-          <input id="file-input" type="file" accept=".pdf,.txt,.md,image/*" style="display:none"/>
+          <input id="file-input" type="file" accept=".pdf,.txt,.md,.csv,.json,.xml,.py,.js,.ts,.html,.css,image/*,video/*" style="display:none"/>
         </div>
       </div>
     </div>
@@ -551,32 +551,40 @@ function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(
 // ═══════════════════════════════════════════════════════════════
 // API
 // ═══════════════════════════════════════════════════════════════
-// Convert Anthropic-style content parts → Gemini parts array
+// Convert content parts → Gemini parts array
 function toGeminiParts(content){
   if(typeof content === 'string') return [{text: content}];
   return content.map(p=>{
-    if(p.type==='text') return {text: p.text};
-    if(p.type==='image') return {inline_data:{mime_type:p.source.media_type, data:p.source.data}};
+    if(p.type==='text')     return {text: p.text};
+    if(p.type==='image')    return {inline_data:{mime_type:p.source.media_type, data:p.source.data}};
     if(p.type==='document') return {inline_data:{mime_type:p.source.media_type, data:p.source.data}};
+    if(p.type==='video')    return {inline_data:{mime_type:p.source.media_type, data:p.source.data}};
     return {text: JSON.stringify(p)};
   });
 }
 
-// contents must be [{role:'user'|'model', parts:[{text:...}|{inline_data:...}]}]
-async function callAI(contents, system){
-  if(!state.apiKey) throw new Error('No Gemini API key — go to ⚙ Settings and add your key.');
+// jsonMode=true forces Gemini to return pure JSON (no markdown wrapping)
+async function callAI(contents, system, {jsonMode=false}={}){
+  if(!state.apiKey) throw new Error('No Gemini API key — tap ⚙ Settings and paste your AIza… key from aistudio.google.com.');
   const r = await fetch(`${GEMINI_URL}?key=${encodeURIComponent(state.apiKey)}`,{
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({
       system_instruction:{parts:[{text: system}]},
       contents,
-      generationConfig:{maxOutputTokens:2048}
+      generationConfig:{
+        maxOutputTokens: 2048,
+        ...(jsonMode ? {responseMimeType:'application/json'} : {})
+      }
     })
   });
   if(!r.ok){
     const e = await r.json().catch(()=>({}));
-    throw new Error(e?.error?.message || 'Gemini API error '+r.status);
+    const msg = e?.error?.message || '';
+    if(r.status===400) throw new Error('Gemini: bad request — '+msg);
+    if(r.status===401||r.status===403) throw new Error('Gemini: invalid API key. Check ⚙ Settings. ('+msg+')');
+    if(r.status===429) throw new Error('Gemini: rate limit hit — wait a moment and try again.');
+    throw new Error('Gemini API error '+r.status+(msg?' — '+msg:''));
   }
   const d = await r.json();
   return d.candidates?.[0]?.content?.parts?.[0]?.text || '';
@@ -602,16 +610,16 @@ Return exactly this JSON structure:
   "connections": ["summary fragments of existing thoughts this genuinely connects to"],
   "contradiction": "description of existing belief this contradicts, or null"
 }`;
-  const raw = await callAI([{role:'user', parts: toGeminiParts(content)}], system);
-  try{
-    return JSON.parse(raw.replace(/^```json|^```|```$/gm,'').trim());
-  }catch{
-    return {
-      summary: raw.slice(0,200), domain:'Other', tags:[], confidence:'hypothesis',
-      keyInsight: raw.slice(0,120), fullAnalysis: raw.slice(0,400),
-      implication:'', question:'', connections:[], contradiction:null
-    };
-  }
+  const raw = await callAI([{role:'user', parts: toGeminiParts(content)}], system, {jsonMode:true});
+  // Try direct parse; then find JSON object inside any extra prose
+  try{ return JSON.parse(raw.trim()); }catch{}
+  const m = raw.match(/\{[\s\S]*\}/);
+  if(m){ try{ return JSON.parse(m[0]); }catch{} }
+  return {
+    summary: raw.slice(0,200), domain:'Other', tags:[], confidence:'hypothesis',
+    keyInsight: raw.slice(0,120), fullAnalysis: raw.slice(0,400),
+    implication:'', question:'', connections:[], contradiction:null
+  };
 }
 
 async function chatWithBrain(userMsg){
@@ -1303,25 +1311,38 @@ function setListening(v){
 // ═══════════════════════════════════════════════════════════════
 // FILE HANDLING
 // ═══════════════════════════════════════════════════════════════
+const MAX_INLINE_MB = 20;
 async function handleFile(file){
   if(!file) return;
+  const mb = file.size / 1024 / 1024;
   showProc(true,'Reading file…');
   try{
     if(file.type==='application/pdf'){
+      if(mb>20) throw new Error(`PDF is ${mb.toFixed(1)}MB — keep under 20MB for direct upload.`);
       const b64=await fileToB64(file);
       await addThought([
         {type:'document',source:{type:'base64',media_type:'application/pdf',data:b64}},
         {type:'text',text:`Analyse this PDF thoroughly: "${file.name}". Extract all key insights, arguments, data points, and preserve important details.`}
       ]);
     }else if(file.type.startsWith('image/')){
+      if(mb>10) throw new Error(`Image is ${mb.toFixed(1)}MB — keep under 10MB.`);
       const b64=await fileToB64(file);
       await addThought([
         {type:'image',source:{type:'base64',media_type:file.type,data:b64}},
-        {type:'text',text:'Analyse everything in this image — all visible text, data, charts, concepts, numbers. Preserve every detail precisely.'}
+        {type:'text',text:`Analyse everything in this image: "${file.name}" — all visible text, data, charts, concepts, numbers. Preserve every detail precisely.`}
+      ]);
+    }else if(file.type.startsWith('video/')){
+      if(mb>MAX_INLINE_MB) throw new Error(`Video is ${mb.toFixed(1)}MB — keep under ${MAX_INLINE_MB}MB. For larger videos, upload a clip or paste a YouTube link.`);
+      showProc(true,'Encoding video…');
+      const b64=await fileToB64(file);
+      await addThought([
+        {type:'video',source:{type:'base64',media_type:file.type,data:b64}},
+        {type:'text',text:`Analyse this video: "${file.name}". Extract all key topics, spoken content, insights, visual information, and preserve important details.`}
       ]);
     }else{
+      // Plain text, markdown, CSV, JSON, XML, code files
       const text=await file.text();
-      await addThought(`FILE: ${file.name}\n\n${text.slice(0,6000)}`);
+      await addThought(`FILE: ${file.name}\n\n${text.slice(0,8000)}`);
     }
   }catch(e){ showError(e.message); showProc(false); state.processing=false; }
 }
@@ -1367,6 +1388,29 @@ function b64decode(str){
 }
 
 async function fetchURL(url){
+  // ── YouTube — extract via oEmbed + Jina transcript ──
+  const ytMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+  if(ytMatch){
+    const vid = ytMatch[1];
+    showProc(true,'Reading YouTube video…');
+    // oEmbed for title + author
+    let meta = '';
+    try{
+      const oe = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${vid}&format=json`);
+      if(oe.ok){ const d=await oe.json(); meta=`Title: ${d.title}\nChannel: ${d.author_name}\n\n`; }
+    }catch{}
+    // Jina can extract captions/transcript from YouTube
+    try{
+      const r = await fetch('https://r.jina.ai/https://www.youtube.com/watch?v='+vid,{signal:(()=>{try{return AbortSignal.timeout(20000)}catch{return undefined}})()});
+      if(r.ok){
+        const text = (await r.text()).slice(0,6000);
+        if(text.length>100) return `YOUTUBE VIDEO: https://www.youtube.com/watch?v=${vid}\n${meta}${text}`;
+      }
+    }catch{}
+    if(meta) return `YOUTUBE VIDEO: https://www.youtube.com/watch?v=${vid}\n${meta}(Transcript unavailable — analyse based on title and channel.)`;
+    throw new Error('Could not extract YouTube video content. Paste the transcript manually.');
+  }
+
   // ── GitHub blob file: github.com/{owner}/{repo}/blob/{branch}/{path} ──
   const blobMatch = url.match(/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+?)(?:\?.*)?$/);
   if(blobMatch){
