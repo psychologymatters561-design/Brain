@@ -566,32 +566,51 @@ function toGeminiParts(content){
 // jsonMode=true forces Gemini to return pure JSON (no markdown wrapping)
 async function callAI(contents, system, {jsonMode=false}={}){
   if(!state.apiKey) throw new Error('No Gemini API key — tap ⚙ Settings and paste your AIza… key from aistudio.google.com.');
-  const r = await fetch(`${GEMINI_URL}?key=${encodeURIComponent(state.apiKey)}`,{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({
-      system_instruction:{parts:[{text: system}]},
-      contents,
-      generationConfig:{
-        maxOutputTokens: 2048,
-        ...(jsonMode ? {responseMimeType:'application/json'} : {})
+  // Try flash-2.0 first, then 1.5-flash as fallback (different quota buckets)
+  const models = ['gemini-2.0-flash', 'gemini-1.5-flash'];
+  let lastErr = '';
+  for(const model of models){
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(state.apiKey)}`;
+    for(let attempt=0; attempt<3; attempt++){
+      if(attempt>0){
+        showProc(true,`Rate limit — retrying in ${attempt*2}s…`);
+        await new Promise(res=>setTimeout(res, attempt*2000));
       }
-    })
-  });
-  if(!r.ok){
-    const e = await r.json().catch(()=>({}));
-    const msg = e?.error?.message || '';
-    if(r.status===400) throw new Error('Gemini: bad request — '+msg);
-    if(r.status===401||r.status===403) throw new Error('Gemini: invalid API key. Check ⚙ Settings. ('+msg+')');
-    if(r.status===429) throw new Error('Gemini: rate limit hit — wait a moment and try again.');
-    throw new Error('Gemini API error '+r.status+(msg?' — '+msg:''));
+      let r;
+      try{
+        r = await fetch(endpoint,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            system_instruction:{parts:[{text: system}]},
+            contents,
+            generationConfig:{
+              maxOutputTokens: 1024,
+              ...(jsonMode ? {responseMimeType:'application/json'} : {})
+            }
+          })
+        });
+      }catch(netErr){ lastErr='Network error: '+netErr.message; continue; }
+      if(r.status===429){ lastErr='rate limit'; continue; }
+      if(!r.ok){
+        const e = await r.json().catch(()=>({}));
+        const msg = e?.error?.message || '';
+        if(r.status===400) throw new Error('Gemini bad request — '+msg);
+        if(r.status===401||r.status===403) throw new Error('Invalid Gemini API key — check ⚙ Settings. Key must start with AIza.');
+        lastErr = 'Gemini '+r.status+(msg?' — '+msg:'');
+        break;
+      }
+      const d = await r.json();
+      return d.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    }
   }
-  const d = await r.json();
-  return d.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  if(lastErr==='rate limit')
+    throw new Error('Gemini free-tier rate limit reached. Wait 60 seconds, then try again. (15 requests/min max on free tier)');
+  throw new Error(lastErr || 'Gemini API error — check ⚙ Settings.');
 }
 
 async function processInput(content, existingThoughts){
-  const ctx = existingThoughts.slice(-20).map(t=>`[${t.domain}] ${t.summary}`).join('\n');
+  const ctx = existingThoughts.slice(-8).map(t=>`[${t.domain}] ${t.summary}`).join('\n');
   const system = `You are the analytical engine of a personal second brain. Return ONLY raw JSON — no markdown, no backticks, no explanation before or after.
 
 EXISTING KNOWLEDGE (last 20 entries):
@@ -610,7 +629,9 @@ Return exactly this JSON structure:
   "connections": ["summary fragments of existing thoughts this genuinely connects to"],
   "contradiction": "description of existing belief this contradicts, or null"
 }`;
-  const raw = await callAI([{role:'user', parts: toGeminiParts(content)}], system, {jsonMode:true});
+  // Truncate text content to limit tokens (≈600 tokens per 2500 chars)
+  const trimContent = typeof content === 'string' ? content.slice(0,2500) : content;
+  const raw = await callAI([{role:'user', parts: toGeminiParts(trimContent)}], system, {jsonMode:true});
   // Try direct parse; then find JSON object inside any extra prose
   try{ return JSON.parse(raw.trim()); }catch{}
   const m = raw.match(/\{[\s\S]*\}/);
@@ -1485,13 +1506,16 @@ ${readmeText||'(no readme)'}${fileList}`;
               .replace(/\s+/g,' ').trim();
   }
   const fetchers=[
-    // Jina Reader — purpose-built for LLM content extraction, supports CORS
+    // Jina Reader — purpose-built for LLM content extraction, CORS-enabled
     async u=>{
-      const r=await fetch('https://r.jina.ai/'+u,{signal:makeSignal(18000)});
+      const r=await fetch('https://r.jina.ai/'+encodeURIComponent(u),{
+        headers:{'Accept':'text/plain','X-Return-Format':'text'},
+        signal:makeSignal(20000)
+      });
       if(!r.ok) throw new Error('jina '+r.status);
       return r.text();
     },
-    // allorigins — JSON wrapper fallback
+    // allorigins fallback
     async u=>{
       const r=await fetch('https://api.allorigins.win/get?url='+encodeURIComponent(u),{signal:makeSignal(12000)});
       if(!r.ok) throw new Error('allorigins '+r.status);
@@ -1502,6 +1526,12 @@ ${readmeText||'(no readme)'}${fileList}`;
       const r=await fetch('https://corsproxy.io/?'+encodeURIComponent(u),{signal:makeSignal(12000)});
       if(!r.ok) throw new Error('corsproxy '+r.status);
       return r.text();
+    },
+    // thingproxy fallback
+    async u=>{
+      const r=await fetch('https://thingproxy.freeboard.io/fetch/'+u,{signal:makeSignal(10000)});
+      if(!r.ok) throw new Error('thingproxy '+r.status);
+      return r.text();
     }
   ];
   let lastErr='all fetchers failed';
@@ -1509,7 +1539,7 @@ ${readmeText||'(no readme)'}${fileList}`;
     try{
       const raw=await fetcher(url);
       const text=stripHtml(raw);
-      if(text.length>80) return text.slice(0,6000);
+      if(text.length>80) return text.slice(0,3000);
     }catch(e){ lastErr=e.message; }
   }
   throw new Error('Could not fetch URL — '+lastErr+'. Try pasting the content directly.');
